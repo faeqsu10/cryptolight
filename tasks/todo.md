@@ -82,3 +82,9 @@
 - [x] 전략별 거래 추적 (trades 테이블 strategy 컬럼 + 마이그레이션)
 - [x] 스레드 안전한 시그널 중복 방지 (threading.Lock)
 - [x] pytest 56개 (logger 마스킹 테스트 추가)
+
+## 11단계: Phase 4d 헬스체크/운영 ✅
+- [x] HealthMonitor (가동시간, 에러 추적, 건강 판단)
+- [x] /status 명령어 실시간 헬스 정보 응답
+- [x] strategy_job 성공/실패 헬스 기록
+- [x] pytest 63개

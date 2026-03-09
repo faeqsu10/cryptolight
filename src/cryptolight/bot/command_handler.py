@@ -18,6 +18,7 @@ class CommandHandler:
         self._last_update_id = 0
         self._kill_switch = False
         self._report_requested = False
+        self._status_requested = False
 
     @property
     def kill_switch(self) -> bool:
@@ -27,8 +28,15 @@ class CommandHandler:
     def report_requested(self) -> bool:
         return self._report_requested
 
+    @property
+    def status_requested(self) -> bool:
+        return self._status_requested
+
     def reset_report(self):
         self._report_requested = False
+
+    def reset_status(self):
+        self._status_requested = False
 
     def poll_commands(self) -> list[str]:
         """새 명령어를 폴링한다. 명령어 목록 반환."""
@@ -70,7 +78,8 @@ class CommandHandler:
             self._send("거래 중지 명령 수신. 봇을 정지합니다.")
             logger.warning("킬스위치 활성화: /stop 명령")
         elif cmd == "/status":
-            self._send("상태 조회는 다음 실행 주기에 응답합니다.")
+            self._status_requested = True
+            self._send("상태 조회 중...")
         elif cmd == "/report":
             self._report_requested = True
             self._send("일일 요약을 생성 중입니다...")

@@ -11,6 +11,7 @@ from cryptolight.bot.command_handler import CommandHandler
 from cryptolight.bot.telegram_bot import TelegramBot
 from cryptolight.config import get_settings
 from cryptolight.exchange.candle_cache import CandleCache
+from cryptolight.health import HealthMonitor
 from cryptolight.exchange.upbit import UpbitClient
 from cryptolight.execution.base import BaseBroker
 from cryptolight.execution.live_broker import LiveBroker
@@ -29,6 +30,7 @@ _signal_lock = threading.Lock()
 _candle_cache: CandleCache | None = None
 _cooldown: TradeCooldown | None = None
 _position_sizer: PositionSizer | None = None
+_health: HealthMonitor | None = None
 
 
 def run_strategy(
@@ -224,8 +226,12 @@ def strategy_job(
     logger = setup_logger("cryptolight.main")
     try:
         run_strategy(client, bot, broker, risk_guard, symbols, settings)
+        if _health:
+            _health.record_success()
     except Exception:
         logger.exception("전략 실행 중 에러 발생 — 이번 주기 스킵")
+        if _health:
+            _health.record_failure()
 
 
 def daily_summary_job(
@@ -273,6 +279,10 @@ def command_job(
         if cmd_handler.report_requested and bot and repo and client and symbols:
             daily_summary_job(bot, broker, repo, client, symbols)
             cmd_handler.reset_report()
+        if cmd_handler.status_requested and bot:
+            status_text = _health.summary_text() if _health else "헬스 모니터 미초기화"
+            bot.send_message(f"\U0001f4cb <b>봇 상태</b>\n<pre>{status_text}</pre>")
+            cmd_handler.reset_status()
     except Exception:
         logger.exception("명령어 폴링 중 에러 발생")
 
@@ -327,8 +337,9 @@ def main():
 
     client = UpbitClient(settings.upbit_access_key, settings.upbit_secret_key)
 
-    # 캔들 캐시, 쿨다운, 포지션 사이징 초기화
-    global _candle_cache, _cooldown, _position_sizer
+    # 캔들 캐시, 쿨다운, 포지션 사이징, 헬스체크 초기화
+    global _candle_cache, _cooldown, _position_sizer, _health
+    _health = HealthMonitor()
     _candle_cache = CandleCache(ttl_seconds=settings.candle_cache_ttl)
     _cooldown = TradeCooldown(
         cooldown_seconds=settings.trade_cooldown_seconds,
