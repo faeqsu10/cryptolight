@@ -415,29 +415,71 @@ def _send_market_info(bot: TelegramBot, settings) -> None:
         rsi_val = snap.get("rsi")
         rsi_str = f"{rsi_val:.1f}" if rsi_val else "N/A"
         regime = snap.get("regime", "N/A")
-        adx = snap.get("adx", 0)
         price = snap.get("price", 0)
         change = snap.get("change", 0)
         action = snap.get("action", "hold")
-        weight = snap.get("weight", 1.0)
 
         action_kr = {"buy": "매수", "sell": "매도", "hold": "관망"}.get(action, action)
 
-        lines.append(f"── {sym} ──")
-        lines.append(f"  현재가: {price:,.0f} KRW ({change:+.1f}%)")
-        lines.append(f"  RSI: {rsi_str} (매수≤30, 매도≥70)")
-        lines.append(f"  국면: {regime} (ADX={adx:.0f})")
-        lines.append(f"  가중치: {weight:.1f} | 판단: {action_kr}")
+        # RSI 해설
+        if rsi_val is not None:
+            if rsi_val <= 30:
+                rsi_desc = "과매도 (싸게 살 기회)"
+            elif rsi_val >= 70:
+                rsi_desc = "과매수 (비싸서 위험)"
+            elif rsi_val <= 40:
+                rsi_desc = "약간 저평가"
+            elif rsi_val >= 60:
+                rsi_desc = "약간 고평가"
+            else:
+                rsi_desc = "중립 (뚜렷한 방향 없음)"
+        else:
+            rsi_desc = ""
 
-    lines.append(f"\n전략: {settings.strategy_name}")
-    lines.append(f"주기: {settings.schedule_interval_minutes}분")
+        # 국면 해설
+        regime_desc = {
+            "trending": "추세장 — 한 방향으로 강하게 움직이는 중",
+            "sideways": "횡보장 — 큰 움직임 없이 제자리",
+            "volatile": "변동장 — 위아래로 크게 흔들리는 중",
+        }.get(regime, "")
+
+        # 판단 해설
+        action_desc = {
+            "buy": "매수 조건 충족 — 봇이 매수를 시도합니다",
+            "sell": "매도 조건 충족 — 봇이 매도를 시도합니다",
+            "hold": "매매 조건 미충족 — 지켜보는 중",
+        }.get(action, "")
+
+        # 변동률 해설
+        if abs(change) >= 5:
+            change_desc = " (큰 변동!)" if change > 0 else " (큰 하락!)"
+        elif abs(change) >= 2:
+            change_desc = " (상승세)" if change > 0 else " (하락세)"
+        else:
+            change_desc = " (안정적)"
+
+        lines.append(f"── {sym} ──")
+        lines.append(f"  현재가: {price:,.0f} KRW ({change:+.1f}%){change_desc}")
+        lines.append(f"  RSI: {rsi_str} — {rsi_desc}")
+        lines.append(f"  국면: {regime} — {regime_desc}")
+        lines.append(f"  봇 판단: {action_kr} — {action_desc}")
+
+    strategy_desc = {
+        "rsi": "RSI (과매수/과매도 기반)",
+        "macd": "MACD (추세 전환 감지)",
+        "bollinger": "볼린저밴드 (가격 이탈 감지)",
+        "ensemble": "앙상블 (여러 전략 종합)",
+    }.get(settings.strategy_name, settings.strategy_name)
+
+    lines.append(f"\n전략: {strategy_desc}")
+    lines.append(f"분석 주기: {settings.schedule_interval_minutes}분마다 자동 분석")
 
     bot.send_message(
         f"\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(chr(10).join(lines))}</pre>"
     )
 
 
-def command_job(
+def command_loop(
     cmd_handler: CommandHandler,
     scheduler: BlockingScheduler,
     bot: TelegramBot | None,
@@ -446,39 +488,43 @@ def command_job(
     client: UpbitClient | None = None,
     symbols: list[str] | None = None,
     settings=None,
+    stop_event: threading.Event | None = None,
 ):
-    """명령어 폴링 job. 킬스위치 감지 시 스케줄러 종료."""
+    """명령어 long polling 루프 (전용 스레드에서 실행). 킬스위치 감지 시 스케줄러 종료."""
     logger = setup_logger("cryptolight.main")
-    try:
-        cmd_handler.poll_commands()
-        if cmd_handler.kill_switch:
-            logger.warning("킬스위치 활성 — 스케줄러 종료 요청")
-            if bot:
-                bot.send_message("\u26d4 킬스위치 활성 — 봇을 종료합니다.")
-            scheduler.shutdown(wait=False)
-        if cmd_handler.report_requested and bot and repo and client and symbols:
-            daily_summary_job(bot, broker, repo, client, symbols)
-            cmd_handler.reset_report()
-        if cmd_handler.status_requested and bot:
-            status_text = _health.summary_text() if _health else "헬스 모니터 미초기화"
-            bot.send_message(f"\U0001f4cb <b>봇 상태</b>\n<pre>{status_text}</pre>")
-            cmd_handler.reset_status()
-        if cmd_handler.info_requested and bot and settings:
-            _send_market_info(bot, settings)
-            cmd_handler.reset_info()
-        # /ask 질문 처리
-        if _ai_assistant and bot:
-            for question in cmd_handler.get_pending_questions():
-                context = _build_market_context()
-                answer = _ai_assistant.ask(question, context=context)
-                remaining = _ai_assistant.remaining_today
-                bot.send_message(
-                    f"\U0001f916 <b>AI 답변</b>\n\n"
-                    f"{html_mod.escape(answer)}\n\n"
-                    f"<i>남은 횟수: {remaining}회/일</i>"
-                )
-    except Exception:
-        logger.exception("명령어 폴링 중 에러 발생")
+    logger.info("명령어 폴링 스레드 시작 (long polling)")
+    while not (stop_event and stop_event.is_set()):
+        try:
+            cmd_handler.poll_commands()
+            if cmd_handler.kill_switch:
+                logger.warning("킬스위치 활성 — 스케줄러 종료 요청")
+                if bot:
+                    bot.send_message("\u26d4 킬스위치 활성 — 봇을 종료합니다.")
+                scheduler.shutdown(wait=False)
+                break
+            if cmd_handler.report_requested and bot and repo and client and symbols:
+                daily_summary_job(bot, broker, repo, client, symbols)
+                cmd_handler.reset_report()
+            if cmd_handler.status_requested and bot:
+                status_text = _health.summary_text() if _health else "헬스 모니터 미초기화"
+                bot.send_message(f"\U0001f4cb <b>봇 상태</b>\n<pre>{status_text}</pre>")
+                cmd_handler.reset_status()
+            if cmd_handler.info_requested and bot and settings:
+                _send_market_info(bot, settings)
+                cmd_handler.reset_info()
+            # /ask 질문 처리
+            if _ai_assistant and bot:
+                for question in cmd_handler.get_pending_questions():
+                    context = _build_market_context()
+                    answer = _ai_assistant.ask(question, context=context)
+                    remaining = _ai_assistant.remaining_today
+                    bot.send_message(
+                        f"\U0001f916 <b>AI 답변</b>\n\n"
+                        f"{html_mod.escape(answer)}\n\n"
+                        f"<i>남은 횟수: {remaining}회/일</i>"
+                    )
+        except Exception:
+            logger.exception("명령어 폴링 중 에러 발생")
 
 
 def main():
@@ -608,16 +654,16 @@ def main():
         next_run_time=None,  # 첫 실행은 아래에서 즉시 수행
     )
 
+    # 명령어 폴링: 전용 스레드에서 long polling (즉시 응답)
+    cmd_stop_event = threading.Event()
     if cmd_handler:
-        scheduler.add_job(
-            command_job,
-            "interval",
-            seconds=settings.command_poll_seconds,
-            max_instances=1,
-            misfire_grace_time=30,
-            args=[cmd_handler, scheduler, bot, broker, repo, client, settings.symbol_list, settings],
-            id="command_poll",
+        cmd_thread = threading.Thread(
+            target=command_loop,
+            args=[cmd_handler, scheduler, bot, broker, repo, client, settings.symbol_list, settings, cmd_stop_event],
+            daemon=True,
+            name="command-poll",
         )
+        cmd_thread.start()
 
     if bot:
         scheduler.add_job(

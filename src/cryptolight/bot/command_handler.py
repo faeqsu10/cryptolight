@@ -14,7 +14,7 @@ class CommandHandler:
         self._token = token
         self._chat_id = chat_id
         self._base_url = f"https://api.telegram.org/bot{token}"
-        self._client = httpx.Client(timeout=10.0)
+        self._client = httpx.Client(timeout=30.0)
         self._last_update_id = 0
         self._kill_switch = False
         self._report_requested = False
@@ -70,7 +70,7 @@ class CommandHandler:
         try:
             resp = self._client.get(
                 f"{self._base_url}/getUpdates",
-                params={"offset": self._last_update_id + 1, "timeout": 1},
+                params={"offset": self._last_update_id + 1, "timeout": 20},
             )
             if resp.status_code != 200:
                 return commands
