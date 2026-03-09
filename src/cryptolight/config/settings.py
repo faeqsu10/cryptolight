@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     backtest_slippage_pct: float = 0.1  # 슬리피지 시뮬레이션 (0.1%)
     backtest_spread_pct: float = 0.05  # 스프레드 시뮬레이션 (0.05%)
 
+    # 자동 최적화 / 자기개선 루프
+    enable_auto_optimization: bool = False  # 자동 최적화 활성화
+    arena_lookback_days: int = 30  # Arena 백테스트 데이터 기간
+    optimizer_trials: int = 50  # 파라미터 최적화 시도 횟수
+    min_sharpe_improvement: float = 0.5  # 전략 전환 최소 Sharpe 개선폭
+    switch_cooldown_days: int = 7  # 전략 전환 후 쿨다운 기간
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     @property

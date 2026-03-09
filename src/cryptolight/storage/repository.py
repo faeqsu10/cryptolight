@@ -54,6 +54,15 @@ class TradeRepository:
                 value REAL NOT NULL
             )
         """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS strategy_switches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_strategy TEXT NOT NULL,
+                to_strategy TEXT NOT NULL,
+                reason TEXT,
+                switched_at TEXT NOT NULL
+            )
+        """)
         self._conn.commit()
 
     def save_trade(self, trade: TradeRecord) -> int:
@@ -176,6 +185,39 @@ class TradeRepository:
             WHERE t1.side = 'sell' AND t1.strategy = ?
             ORDER BY t1.id
         """, (strategy,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_strategy_trades(self, strategy: str, since: str = "") -> list[dict]:
+        """특정 전략의 거래 내역을 반환한다. since: YYYY-MM-DD 이후."""
+        if since:
+            rows = self._conn.execute(
+                "SELECT * FROM trades WHERE strategy = ? AND timestamp >= ? ORDER BY id",
+                (strategy, since),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM trades WHERE strategy = ? ORDER BY id",
+                (strategy,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_strategy_switch(
+        self, from_strategy: str, to_strategy: str, reason: str
+    ) -> None:
+        """전략 전환을 기록한다."""
+        from datetime import datetime
+        self._conn.execute(
+            "INSERT INTO strategy_switches (from_strategy, to_strategy, reason, switched_at) VALUES (?, ?, ?, ?)",
+            (from_strategy, to_strategy, reason, datetime.now().isoformat()),
+        )
+        self._conn.commit()
+
+    def get_strategy_switches(self, limit: int = 10) -> list[dict]:
+        """최근 전략 전환 이력을 반환한다."""
+        rows = self._conn.execute(
+            "SELECT * FROM strategy_switches ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def close(self):

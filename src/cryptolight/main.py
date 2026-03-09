@@ -23,6 +23,7 @@ from cryptolight.risk.position_sizer import PositionSizer
 from cryptolight.risk.risk_guard import RiskGuard
 from cryptolight.storage.repository import TradeRepository
 from cryptolight.storage.strategy_tracker import StrategyTracker
+from cryptolight.evaluation import PerformanceEvaluator, StrategyArena, AdaptiveController
 from cryptolight.strategy import create_strategy
 from cryptolight.utils import setup_logger
 
@@ -281,6 +282,82 @@ def daily_summary_job(
         logger.exception("일일 요약 전송 실패")
 
 
+def self_improvement_job(
+    client: UpbitClient,
+    repo: TradeRepository,
+    bot: TelegramBot | None,
+    settings,
+):
+    """주간 자기개선 루프: 성과 평가 → Arena 경쟁 → 전략 전환 판단."""
+    logger = setup_logger("cryptolight.main")
+    if not settings.enable_auto_optimization:
+        return
+
+    try:
+        # 1. 성과 평가
+        evaluator = PerformanceEvaluator(repo)
+        perf_summary = evaluator.summary_text(days=settings.arena_lookback_days)
+        logger.info("자기개선 루프 시작\n%s", perf_summary)
+
+        # 2. Arena 경쟁 — 캔들 데이터 수집
+        symbol = settings.symbol_list[0] if settings.symbol_list else "KRW-BTC"
+        candles = client.get_candles(symbol, interval="day", count=settings.arena_lookback_days)
+
+        arena = StrategyArena(
+            initial_balance=settings.paper_initial_balance,
+            order_amount=settings.max_order_amount_krw,
+            n_folds=3,
+        )
+        arena_results = arena.compete(candles)
+        arena_text = arena.summary_text(arena_results)
+        logger.info(arena_text)
+
+        # 3. 전략 전환 판단
+        controller = AdaptiveController(
+            repo=repo,
+            min_sharpe_improvement=settings.min_sharpe_improvement,
+            cooldown_days=settings.switch_cooldown_days,
+        )
+
+        switch_decision = controller.should_switch(
+            settings.strategy_name, arena_results, evaluator,
+        )
+        logger.info("전환 판단: %s", switch_decision["reason"])
+
+        if switch_decision["switch"]:
+            controller.record_switch(
+                switch_decision["from"], switch_decision["to"], switch_decision["reason"],
+            )
+            msg = (
+                f"전략 전환: {switch_decision['from']} → {switch_decision['to']}\n"
+                f"사유: {switch_decision['reason']}"
+            )
+            logger.warning(msg)
+            if bot:
+                bot.send_message(f"<b>전략 자동 전환</b>\n<pre>{msg}</pre>")
+
+        # 4. 롤백 체크
+        rollback = controller.check_rollback(settings.strategy_name, evaluator)
+        if rollback:
+            logger.warning("롤백 제안: %s", rollback["reason"])
+            if bot:
+                bot.send_message(
+                    f"<b>롤백 제안</b>\n"
+                    f"{rollback['from']} → {rollback['to']}\n"
+                    f"사유: {rollback['reason']}"
+                )
+
+        # 5. 텔레그램 요약 전송
+        if bot:
+            bot.send_message(
+                f"<b>자기개선 루프 완료</b>\n<pre>{arena_text}</pre>\n"
+                f"전환 판단: {switch_decision['reason']}"
+            )
+
+    except Exception:
+        logger.exception("자기개선 루프 실행 중 에러")
+
+
 def command_job(
     cmd_handler: CommandHandler,
     scheduler: BlockingScheduler,
@@ -449,6 +526,19 @@ def main():
             args=[bot, broker, repo, client, settings.symbol_list],
             id="daily_summary",
         )
+
+    # 자기개선 루프: 매주 일요일 03:00 KST
+    if settings.enable_auto_optimization:
+        scheduler.add_job(
+            self_improvement_job,
+            "cron",
+            day_of_week="sun",
+            hour=3,
+            minute=0,
+            args=[client, repo, bot, settings],
+            id="self_improvement",
+        )
+        logger.info("자기개선 루프 활성화: 매주 일요일 03:00 실행")
 
     # Graceful shutdown
     def _shutdown(signum, _frame):
