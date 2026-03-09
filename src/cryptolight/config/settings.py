@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     surge_alert_threshold: float = 0.05  # 5% 이상 변동 시 알림
 
     # 전략
-    strategy_name: str = "rsi"  # rsi | macd | bollinger | volatility_breakout | ensemble
+    strategy_name: str = "score"  # rsi | macd | bollinger | volatility_breakout | ensemble | score
     ensemble_strategies: str = "rsi,macd,bollinger"  # 앙상블에 사용할 전략 목록
+    min_confidence: float = 0.4  # 최소 신뢰도 — 이 미만이면 주문 차단
 
     # Google AI (Gemini)
     google_api_key: str = ""

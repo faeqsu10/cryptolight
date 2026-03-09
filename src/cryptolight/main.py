@@ -116,6 +116,10 @@ def run_strategy(
             regime_info = _regime_detector.detect(candles)
             logger.info("시장 국면: %s (ADX=%.1f, 매매가중치=%.1f)", regime_info["regime"], regime_info["adx"], regime_info["trade_weight"])
 
+        # score 전략에 국면 연동
+        if hasattr(strategy, "regime") and regime_info:
+            strategy.regime = regime_info["regime"]
+
         # 전략 분석
         signal_result = strategy.analyze(candles)
         signal_result.symbol = symbol
@@ -140,6 +144,13 @@ def run_strategy(
 
         # 매수 실행
         if broker and signal_result.action == "buy":
+            # confidence 게이트
+            if signal_result.confidence < settings.min_confidence:
+                logger.info(
+                    "신뢰도 부족 차단: %s confidence=%.2f < threshold=%.2f",
+                    symbol, signal_result.confidence, settings.min_confidence,
+                )
+                continue
             # 쿨다운 체크
             if _cooldown:
                 can, reason = _cooldown.can_trade(symbol)
