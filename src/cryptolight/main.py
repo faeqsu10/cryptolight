@@ -9,10 +9,13 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from cryptolight.bot.command_handler import CommandHandler
 from cryptolight.bot.telegram_bot import TelegramBot
 from cryptolight.config import get_settings
+from cryptolight.exchange.candle_cache import CandleCache
 from cryptolight.exchange.upbit import UpbitClient
 from cryptolight.execution.base import BaseBroker
 from cryptolight.execution.live_broker import LiveBroker
 from cryptolight.execution.paper_broker import PaperBroker
+from cryptolight.risk.cooldown import TradeCooldown
+from cryptolight.risk.position_sizer import PositionSizer
 from cryptolight.risk.risk_guard import RiskGuard
 from cryptolight.storage.repository import TradeRepository
 from cryptolight.strategy import create_strategy
@@ -20,6 +23,10 @@ from cryptolight.utils import setup_logger
 
 # 중복 시그널 방지: symbol -> action
 _last_signals: dict[str, str] = {}
+# 모듈 레벨 캐시/쿨다운 (main()에서 초기화)
+_candle_cache: CandleCache | None = None
+_cooldown: TradeCooldown | None = None
+_position_sizer: PositionSizer | None = None
 
 
 def run_strategy(
@@ -38,7 +45,14 @@ def run_strategy(
         strategy = create_strategy(settings.strategy_name)
 
     for symbol in symbols:
-        candles = client.get_candles(symbol, interval="day", count=strategy.required_candle_count() * 2)
+        # 캔들 캐시 활용
+        candle_count = strategy.required_candle_count() * 2
+        cache_key = _candle_cache.make_key(symbol, "day", candle_count) if _candle_cache else ""
+        candles = (_candle_cache.get(cache_key) if _candle_cache else None)
+        if candles is None:
+            candles = client.get_candles(symbol, interval="day", count=candle_count)
+            if _candle_cache:
+                _candle_cache.put(cache_key, candles)
         ticker = client.get_ticker(symbol)
 
         logger.info(
@@ -98,6 +112,13 @@ def run_strategy(
 
         # 매수 실행
         if broker and signal_result.action == "buy":
+            # 쿨다운 체크
+            if _cooldown:
+                can, reason = _cooldown.can_trade(symbol)
+                if not can:
+                    logger.info("쿨다운 차단: %s — %s", symbol, reason)
+                    continue
+
             # 리스크 체크
             if risk_guard:
                 if isinstance(broker, PaperBroker):
@@ -137,9 +158,18 @@ def run_strategy(
                         bot.send_message(f"\u26a0\ufe0f <b>매수 차단</b>\n{symbol}: {check.reason}")
                     continue
 
-            order = broker.buy_market(symbol, settings.max_order_amount_krw, ticker.price, reason=signal_result.reason)
+            # 포지션 사이징
+            if _position_sizer:
+                equity = broker.get_equity({symbol: ticker.price}) if isinstance(broker, PaperBroker) else settings.max_order_amount_krw
+                order_amount = _position_sizer.calculate(equity, signal_result.confidence)
+            else:
+                order_amount = settings.max_order_amount_krw
+
+            order = broker.buy_market(symbol, order_amount, ticker.price, reason=signal_result.reason)
             if order:
-                logger.info("매수 체결: %s %s KRW [%s]", symbol, f"{settings.max_order_amount_krw:,.0f}", settings.trade_mode)
+                if _cooldown:
+                    _cooldown.record_trade(symbol)
+                logger.info("매수 체결: %s %s KRW [%s]", symbol, f"{order_amount:,.0f}", settings.trade_mode)
 
         elif broker and signal_result.action == "sell":
             if isinstance(broker, PaperBroker):
@@ -293,6 +323,24 @@ def main():
     )
 
     client = UpbitClient(settings.upbit_access_key, settings.upbit_secret_key)
+
+    # 캔들 캐시, 쿨다운, 포지션 사이징 초기화
+    global _candle_cache, _cooldown, _position_sizer
+    _candle_cache = CandleCache(ttl_seconds=settings.candle_cache_ttl)
+    _cooldown = TradeCooldown(
+        cooldown_seconds=settings.trade_cooldown_seconds,
+        max_orders_per_hour=settings.max_orders_per_hour,
+    )
+    _position_sizer = PositionSizer(
+        method=settings.position_sizing_method,
+        fixed_amount=settings.max_order_amount_krw,
+        risk_pct=settings.position_risk_pct,
+        max_amount=settings.absolute_max_order_krw,
+    )
+    logger.info(
+        "포지션 사이징: %s, 쿨다운: %ds, 캔들캐시 TTL: %ds",
+        settings.position_sizing_method, settings.trade_cooldown_seconds, settings.candle_cache_ttl,
+    )
 
     if settings.trade_mode == "paper":
         broker = PaperBroker(initial_balance=settings.paper_initial_balance, repo=repo)

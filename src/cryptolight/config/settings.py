@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_file: str = ""  # 비어있으면 파일 로깅 비활성화, 경로 지정 시 RotatingFileHandler
 
+    # 포지션 사이징
+    position_sizing_method: str = "fixed"  # fixed | percent | kelly
+    position_risk_pct: float = 2.0  # percent 모드: 총자산의 N%
+
+    # 쿨다운
+    trade_cooldown_seconds: int = 300  # 동일 종목 재주문 대기 (5분)
+    max_orders_per_hour: int = 10  # 시간당 최대 주문 횟수
+
+    # 캔들 캐시
+    candle_cache_ttl: int = 60  # 캔들 캐시 TTL (초)
+
     # 백테스트
     backtest_slippage_pct: float = 0.1  # 슬리피지 시뮬레이션 (0.1%)
     backtest_spread_pct: float = 0.05  # 스프레드 시뮬레이션 (0.05%)

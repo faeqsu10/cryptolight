@@ -69,3 +69,10 @@
 - [x] .gitignore에 data/ 추가
 - [x] pytest 단위 테스트 35개 (settings, risk, backtest, strategies, broker)
 - [x] ruff 린트 클린
+
+## 9단계: Phase 4b 고급 리스크/성능 ✅
+- [x] 포지션 사이징 (fixed / percent / Kelly Criterion)
+- [x] 캔들 캐시 (TTL 기반, 중복 API 호출 방지)
+- [x] 이상 거래 감지 (종목별 쿨다운, 시간당 주문 횟수 제한)
+- [x] main.py에 포지션 사이징/캐시/쿨다운 통합
+- [x] pytest 52개 (position_sizer, cooldown, candle_cache 추가)
