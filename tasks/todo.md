@@ -42,3 +42,15 @@
 - [x] RiskGuard broker 타입 독립
 - [x] 급등/급락 알림, 일일 요약 강화
 - [x] Settings 통합 (스케줄러/전략/알림/DB경로)
+
+## 7단계: Phase 3 확장 ✅
+- [x] 백테스트 엔진 (수익률, Sharpe, MDD, 승률, CLI)
+- [x] 업비트 캔들 페이지네이션 (to 파라미터)
+- [x] MACD 전략 (골든/데드크로스)
+- [x] 볼린저밴드 전략 (mean reversion)
+- [x] 앙상블 전략 (다수결 투표)
+- [x] 전략 팩토리 + strategy_name 설정 반영
+- [x] 급등/급락 알림 (surge_alert_threshold)
+- [x] 일일 요약 스케줄 (매일 09:00 KST)
+- [x] /report 텔레그램 명령어
+- [x] ensemble_strategies 설정
