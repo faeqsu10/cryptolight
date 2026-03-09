@@ -7,9 +7,7 @@ import httpx
 
 logger = logging.getLogger("cryptolight.bot.ai_assistant")
 
-GEMINI_API_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-)
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 SYSTEM_PROMPT = (
     "당신은 암호화폐 트레이딩 전문 어시스턴트입니다. "
@@ -23,8 +21,9 @@ SYSTEM_PROMPT = (
 class AIAssistant:
     """Gemini API를 사용한 질문 응답. 일일 사용 제한 포함."""
 
-    def __init__(self, api_key: str, daily_limit: int = 10):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", daily_limit: int = 10):
         self._api_key = api_key
+        self._model = model
         self._daily_limit = daily_limit
         self._usage_date: date | None = None
         self._usage_count: int = 0
@@ -51,7 +50,7 @@ class AIAssistant:
 
         try:
             resp = self._client.post(
-                GEMINI_API_URL,
+                f"{GEMINI_API_BASE}/{self._model}:generateContent",
                 params={"key": self._api_key},
                 json={
                     "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},

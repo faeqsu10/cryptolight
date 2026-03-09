@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     # Google AI (Gemini)
     google_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"  # Gemini 모델명
     ask_daily_limit: int = 10  # /ask 일일 사용 제한
 
     # 로깅

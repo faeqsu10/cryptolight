@@ -539,9 +539,10 @@ def main():
     if settings.google_api_key:
         _ai_assistant = AIAssistant(
             api_key=settings.google_api_key,
+            model=settings.gemini_model,
             daily_limit=settings.ask_daily_limit,
         )
-        logger.info("AI 어시스턴트 활성화 (일일 %d회 제한)", settings.ask_daily_limit)
+        logger.info("AI 어시스턴트 활성화 (모델: %s, 일일 %d회 제한)", settings.gemini_model, settings.ask_daily_limit)
     _candle_cache = CandleCache(ttl_seconds=settings.candle_cache_ttl)
     _cooldown = TradeCooldown(
         cooldown_seconds=settings.trade_cooldown_seconds,
