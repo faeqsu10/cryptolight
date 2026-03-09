@@ -25,6 +25,7 @@ from cryptolight.storage.repository import TradeRepository
 from cryptolight.storage.strategy_tracker import StrategyTracker
 import html as html_mod
 
+from cryptolight.bot.ai_assistant import AIAssistant
 from cryptolight.evaluation import PerformanceEvaluator, StrategyArena, AdaptiveController
 from cryptolight.strategy import create_strategy
 from cryptolight.utils import setup_logger
@@ -40,6 +41,7 @@ _health: HealthMonitor | None = None
 _regime_detector: MarketRegime | None = None
 _volume_filter: VolumeFilter | None = None
 _market_snapshots: dict[str, dict] = {}
+_ai_assistant: AIAssistant | None = None
 
 
 def run_strategy(
@@ -385,6 +387,23 @@ def self_improvement_job(
         logger.exception("자기개선 루프 실행 중 에러")
 
 
+def _build_market_context() -> str:
+    """AI 질문에 첨부할 현재 시장 컨텍스트를 구성한다."""
+    if not _market_snapshots:
+        return ""
+    lines = []
+    for sym, snap in _market_snapshots.items():
+        rsi_val = f"{snap['rsi']:.1f}" if snap.get('rsi') else "N/A"
+        lines.append(
+            f"{sym}: 가격={snap.get('price', 0):,.0f}원, "
+            f"변동={snap.get('change', 0):+.1f}%, "
+            f"RSI={rsi_val}, "
+            f"국면={snap.get('regime', 'N/A')}(ADX={snap.get('adx', 0):.0f}), "
+            f"판단={snap.get('action', 'hold')}"
+        )
+    return "\n".join(lines)
+
+
 def _send_market_info(bot: TelegramBot, settings) -> None:
     """현재 시장 상태를 텔레그램으로 전송한다."""
     if not _market_snapshots:
@@ -447,6 +466,17 @@ def command_job(
         if cmd_handler.info_requested and bot and settings:
             _send_market_info(bot, settings)
             cmd_handler.reset_info()
+        # /ask 질문 처리
+        if _ai_assistant and bot:
+            for question in cmd_handler.get_pending_questions():
+                context = _build_market_context()
+                answer = _ai_assistant.ask(question, context=context)
+                remaining = _ai_assistant.remaining_today
+                bot.send_message(
+                    f"\U0001f916 <b>AI 답변</b>\n\n"
+                    f"{html_mod.escape(answer)}\n\n"
+                    f"<i>남은 횟수: {remaining}회/일</i>"
+                )
     except Exception:
         logger.exception("명령어 폴링 중 에러 발생")
 
@@ -502,10 +532,16 @@ def main():
     client = UpbitClient(settings.upbit_access_key, settings.upbit_secret_key)
 
     # 캔들 캐시, 쿨다운, 포지션 사이징, 헬스체크, 국면감지, 거래량필터 초기화
-    global _candle_cache, _cooldown, _position_sizer, _health, _regime_detector, _volume_filter
+    global _candle_cache, _cooldown, _position_sizer, _health, _regime_detector, _volume_filter, _ai_assistant
     _health = HealthMonitor()
     _regime_detector = MarketRegime()
     _volume_filter = VolumeFilter()
+    if settings.google_api_key:
+        _ai_assistant = AIAssistant(
+            api_key=settings.google_api_key,
+            daily_limit=settings.ask_daily_limit,
+        )
+        logger.info("AI 어시스턴트 활성화 (일일 %d회 제한)", settings.ask_daily_limit)
     _candle_cache = CandleCache(ttl_seconds=settings.candle_cache_ttl)
     _cooldown = TradeCooldown(
         cooldown_seconds=settings.trade_cooldown_seconds,

@@ -20,6 +20,7 @@ class CommandHandler:
         self._report_requested = False
         self._status_requested = False
         self._info_requested = False
+        self._ask_queue: list[str] = []
         self._flush_old_updates()
 
     @property
@@ -90,14 +91,28 @@ class CommandHandler:
                 if text.startswith("/"):
                     cmd = text.split()[0].lower()
                     commands.append(cmd)
-                    self._handle_command(cmd)
+                    self._handle_command(cmd, text)
 
         except Exception:
             logger.exception("명령어 폴링 실패")
 
         return commands
 
-    def _handle_command(self, cmd: str):
+    def get_pending_questions(self) -> list[str]:
+        """대기 중인 /ask 질문들을 가져오고 큐를 비운다."""
+        questions = list(self._ask_queue)
+        self._ask_queue.clear()
+        return questions
+
+    def _handle_command(self, cmd: str, full_text: str = ""):
+        if cmd == "/ask":
+            question = full_text[len("/ask"):].strip() if full_text else ""
+            if not question:
+                self._send("사용법: /ask 질문내용\n예: /ask BTC RSI가 30 이하일 때 매수 전략은?")
+            else:
+                self._ask_queue.append(question)
+                self._send("AI에게 질문 중...")
+            return
         if cmd == "/stop":
             self._kill_switch = True
             self._send("거래 중지 명령 수신. 봇을 정지합니다.")
