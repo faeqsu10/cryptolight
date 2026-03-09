@@ -7,10 +7,10 @@
 - [x] 공개 API 연동 테스트 (현재가, 캔들)
 - [x] CLAUDE.md 작성
 
-## 2단계: 알림봇 (Day 2)
-- [ ] RSI 전략 작성
-- [ ] 텔레그램 알림 연동
-- [ ] BTC/ETH 시그널 전송
+## 2단계: 알림봇 (Day 2) ✅
+- [x] RSI 전략 작성 (strategy/base.py + strategy/rsi.py)
+- [x] 텔레그램 알림 연동 (bot/telegram_bot.py)
+- [x] BTC/ETH 시그널 전송 (main.py 흐름 연결)
 
 ## 3단계: Paper Trading (Day 3)
 - [ ] paper trading 구현
