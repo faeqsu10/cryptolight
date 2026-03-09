@@ -21,6 +21,18 @@ class Settings(BaseSettings):
     take_profit_pct: float = 10.0
     target_symbols: str = "KRW-BTC,KRW-ETH"
 
+    # 스케줄러
+    schedule_interval_minutes: int = 5
+    command_poll_seconds: int = 30
+    paper_initial_balance: float = 1_000_000
+    db_path: str = "data/trades.db"
+
+    # 알림
+    surge_alert_threshold: float = 0.05  # 5% 이상 변동 시 알림
+
+    # 전략
+    strategy_name: str = "rsi"  # rsi | volatility_breakout
+
     # 로깅
     log_level: str = "INFO"
 

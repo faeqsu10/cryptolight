@@ -10,7 +10,9 @@ DEFAULT_DB_PATH = Path("data/trades.db")
 
 
 class TradeRepository:
-    def __init__(self, db_path: Path = DEFAULT_DB_PATH):
+    def __init__(self, db_path: Path | None = None):
+        if db_path is None:
+            db_path = DEFAULT_DB_PATH
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
@@ -28,6 +30,20 @@ class TradeRepository:
                 commission REAL NOT NULL,
                 reason TEXT,
                 timestamp TEXT NOT NULL
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS positions (
+                symbol TEXT PRIMARY KEY,
+                quantity REAL NOT NULL,
+                avg_price REAL NOT NULL,
+                total_cost REAL NOT NULL
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS paper_state (
+                key TEXT PRIMARY KEY,
+                value REAL NOT NULL
             )
         """)
         self._conn.commit()
@@ -87,6 +103,40 @@ class TradeRepository:
             "total_commission": total_commission,
             "trade_count": trade_count,
         }
+
+    def save_positions(self, positions: dict, balance_krw: float) -> None:
+        """포지션과 잔고를 DB에 저장한다."""
+        self._conn.execute("DELETE FROM positions")
+        for symbol, pos in positions.items():
+            self._conn.execute(
+                "REPLACE INTO positions (symbol, quantity, avg_price, total_cost) VALUES (?, ?, ?, ?)",
+                (symbol, pos.quantity, pos.avg_price, pos.total_cost),
+            )
+        self._conn.execute(
+            "REPLACE INTO paper_state (key, value) VALUES (?, ?)",
+            ("balance_krw", balance_krw),
+        )
+        self._conn.commit()
+        logger.debug("포지션 저장 완료: %d개 종목, 잔고 %s", len(positions), f"{balance_krw:,.0f}")
+
+    def load_positions(self) -> tuple[dict, float | None]:
+        """DB에서 포지션과 잔고를 로드한다. 없으면 ({}, None) 반환."""
+        positions: dict = {}
+        rows = self._conn.execute("SELECT symbol, quantity, avg_price, total_cost FROM positions").fetchall()
+        for row in rows:
+            positions[row["symbol"]] = {
+                "symbol": row["symbol"],
+                "quantity": row["quantity"],
+                "avg_price": row["avg_price"],
+                "total_cost": row["total_cost"],
+            }
+
+        balance_row = self._conn.execute(
+            "SELECT value FROM paper_state WHERE key = ?", ("balance_krw",)
+        ).fetchone()
+        balance_krw = balance_row["value"] if balance_row else None
+
+        return positions, balance_krw
 
     def close(self):
         self._conn.close()

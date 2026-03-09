@@ -11,13 +11,20 @@ def calculate_rsi(closes: list[float], period: int = 14) -> float | None:
         return None
 
     deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-    recent = deltas[-(period):]
 
-    gains = [d for d in recent if d > 0]
-    losses = [-d for d in recent if d < 0]
+    # 첫 period 구간은 SMA로 초기 avg_gain, avg_loss 계산
+    gains = [d if d > 0 else 0 for d in deltas[:period]]
+    losses = [-d if d < 0 else 0 for d in deltas[:period]]
 
-    avg_gain = sum(gains) / period if gains else 0
-    avg_loss = sum(losses) / period if losses else 0
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+
+    # 이후 구간은 Wilder smoothing 적용
+    for delta in deltas[period:]:
+        current_gain = delta if delta > 0 else 0
+        current_loss = -delta if delta < 0 else 0
+        avg_gain = (avg_gain * (period - 1) + current_gain) / period
+        avg_loss = (avg_loss * (period - 1) + current_loss) / period
 
     if avg_loss == 0:
         return 100.0

@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 
 from cryptolight.exchange.base import OrderResult
+from cryptolight.execution.base import BaseBroker
 from cryptolight.storage.models import TradeRecord
 from cryptolight.storage.repository import TradeRepository
 
@@ -16,7 +17,7 @@ class PaperPosition:
     total_cost: float = 0.0
 
 
-class PaperBroker:
+class PaperBroker(BaseBroker):
     """가상 매매 실행기. 실제 주문 없이 시뮬레이션한다."""
 
     COMMISSION_RATE = 0.0005  # 업비트 0.05%
@@ -26,6 +27,19 @@ class PaperBroker:
         self.initial_balance = initial_balance
         self.positions: dict[str, PaperPosition] = {}
         self._repo = repo
+
+        # DB에서 포지션 복구
+        if self._repo:
+            saved_positions, saved_balance = self._repo.load_positions()
+            for symbol, data in saved_positions.items():
+                self.positions[symbol] = PaperPosition(
+                    symbol=data["symbol"],
+                    quantity=data["quantity"],
+                    avg_price=data["avg_price"],
+                    total_cost=data["total_cost"],
+                )
+            if saved_balance is not None:
+                self.balance_krw = saved_balance
 
     def buy_market(self, symbol: str, amount_krw: float, current_price: float, reason: str = "") -> OrderResult | None:
         commission = amount_krw * self.COMMISSION_RATE
@@ -59,6 +73,7 @@ class PaperBroker:
         )
         if self._repo:
             self._repo.save_trade(trade)
+            self._repo.save_positions(self.positions, self.balance_krw)
 
         return OrderResult(
             order_id=f"paper-buy-{symbol}",
@@ -96,6 +111,7 @@ class PaperBroker:
         )
         if self._repo:
             self._repo.save_trade(trade)
+            self._repo.save_positions(self.positions, self.balance_krw)
 
         return OrderResult(
             order_id=f"paper-sell-{symbol}",

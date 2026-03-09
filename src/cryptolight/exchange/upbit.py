@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import time
 import uuid
 from urllib.parse import urlencode
 
@@ -20,10 +21,14 @@ BASE_URL = "https://api.upbit.com/v1"
 
 
 class UpbitClient(ExchangeClient):
+    _MAX_RETRIES = 3
+    _BACKOFF_BASE = 1  # 초
+
     def __init__(self, access_key: str, secret_key: str):
         self._access_key = access_key
         self._secret_key = secret_key
         self._client = httpx.Client(base_url=BASE_URL, timeout=10.0)
+        self._consecutive_errors: int = 0
 
     # ── 인증 ──
 
@@ -42,23 +47,70 @@ class UpbitClient(ExchangeClient):
         token = jwt.encode(payload, self._secret_key, algorithm="HS256")
         return {"Authorization": f"Bearer {token}"}
 
+    # ── HTTP 공통 ──
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+        auth: bool = False,
+    ) -> dict | list:
+        """HTTP 요청을 실행한다. 최대 3회 재시도, 지수 백오프."""
+        last_exc: Exception | None = None
+
+        for attempt in range(self._MAX_RETRIES):
+            try:
+                headers = self._auth_header(params or json_body) if auth else {}
+                resp = self._client.request(
+                    method, path, params=params, json=json_body, headers=headers,
+                )
+                resp.raise_for_status()
+                self._consecutive_errors = 0
+                return resp.json()
+
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 429:
+                    # Retry-After 헤더 준수
+                    retry_after = float(exc.response.headers.get("Retry-After", self._BACKOFF_BASE * 2**attempt))
+                    logger.warning("429 Too Many Requests — %s초 후 재시도 (%d/%d)", retry_after, attempt + 1, self._MAX_RETRIES)
+                    time.sleep(retry_after)
+                    last_exc = exc
+                elif status >= 500:
+                    wait = self._BACKOFF_BASE * 2**attempt
+                    logger.warning("%d 서버 에러 — %s초 후 재시도 (%d/%d)", status, wait, attempt + 1, self._MAX_RETRIES)
+                    time.sleep(wait)
+                    last_exc = exc
+                else:
+                    # 4xx (429 제외) → 즉시 raise
+                    self._consecutive_errors += 1
+                    if self._consecutive_errors >= 5:
+                        logger.error("연속 에러 %d회 도달", self._consecutive_errors)
+                    raise
+
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                wait = self._BACKOFF_BASE * 2**attempt
+                logger.warning("%s — %s초 후 재시도 (%d/%d)", type(exc).__name__, wait, attempt + 1, self._MAX_RETRIES)
+                time.sleep(wait)
+                last_exc = exc
+
+        # 모든 재시도 소진
+        self._consecutive_errors += 1
+        if self._consecutive_errors >= 5:
+            logger.error("연속 에러 %d회 도달", self._consecutive_errors)
+        raise last_exc  # type: ignore[misc]
+
     def _get(self, path: str, params: dict | None = None, auth: bool = False) -> dict | list:
-        headers = self._auth_header(params) if auth else {}
-        resp = self._client.get(path, params=params, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("GET", path, params=params, auth=auth)
 
     def _post(self, path: str, body: dict) -> dict:
-        headers = self._auth_header(body)
-        resp = self._client.post(path, json=body, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", path, json_body=body, auth=True)
 
     def _delete(self, path: str, params: dict) -> dict:
-        headers = self._auth_header(params)
-        resp = self._client.request("DELETE", path, params=params, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("DELETE", path, params=params, auth=True)
 
     # ── 잔고 ──
 

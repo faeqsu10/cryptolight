@@ -4,13 +4,14 @@ import logging
 
 from cryptolight.exchange.base import OrderResult
 from cryptolight.exchange.upbit import UpbitClient
+from cryptolight.execution.base import BaseBroker
 from cryptolight.storage.models import TradeRecord
 from cryptolight.storage.repository import TradeRepository
 
 logger = logging.getLogger("cryptolight.execution.live")
 
 
-class LiveBroker:
+class LiveBroker(BaseBroker):
     """업비트 실거래 주문 실행기."""
 
     COMMISSION_RATE = 0.0005  # 업비트 0.05%

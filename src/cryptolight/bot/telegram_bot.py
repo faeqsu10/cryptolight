@@ -59,11 +59,26 @@ class TelegramBot:
             f"종목: {', '.join(symbols)}"
         )
 
-    def send_daily_summary(self, summary: dict):
+    def send_daily_summary(self, pnl_data: dict, positions_summary: str = ""):
         lines = ["\U0001f4ca <b>일일 요약</b>"]
-        for key, value in summary.items():
-            lines.append(f"  {key}: {value}")
+        lines.append(f"거래 수: {pnl_data.get('trade_count', 0)}건")
+        lines.append(f"매수: {pnl_data.get('total_bought', 0):,.0f} KRW")
+        lines.append(f"매도: {pnl_data.get('total_sold', 0):,.0f} KRW")
+        lines.append(f"수수료: {pnl_data.get('total_commission', 0):,.0f} KRW")
+        lines.append(f"실현 손익: {pnl_data.get('realized_pnl', 0):+,.0f} KRW")
+        if positions_summary:
+            lines.append(f"\n{positions_summary}")
         self.send_message("\n".join(lines))
+
+    def send_surge_alert(self, symbol: str, price: float, change_rate: float):
+        emoji = "\U0001f4c8" if change_rate > 0 else "\U0001f4c9"
+        direction = "급등" if change_rate > 0 else "급락"
+        self.send_message(
+            f"{emoji} <b>{direction} 알림</b>\n"
+            f"종목: {symbol}\n"
+            f"현재가: {price:,.0f} KRW\n"
+            f"변동률: {change_rate * 100:+.2f}%"
+        )
 
     def close(self):
         self._client.close()

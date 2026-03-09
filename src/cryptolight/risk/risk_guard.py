@@ -3,7 +3,6 @@
 import logging
 from dataclasses import dataclass
 
-from cryptolight.execution.paper_broker import PaperBroker
 from cryptolight.storage.repository import TradeRepository
 
 logger = logging.getLogger("cryptolight.risk")
@@ -17,6 +16,8 @@ class RiskCheckResult:
 
 class RiskGuard:
     """주문 실행 전 리스크 검증을 수행한다."""
+
+    COMMISSION_RATE = 0.0005  # 업비트 0.05%
 
     def __init__(
         self,
@@ -35,7 +36,12 @@ class RiskGuard:
         self._repo = repo
 
     def check_buy(
-        self, symbol: str, amount_krw: float, broker: PaperBroker,
+        self,
+        symbol: str,
+        amount_krw: float,
+        balance_krw: float,
+        active_positions: int,
+        already_holding: bool,
     ) -> RiskCheckResult:
         """매수 주문 전 리스크 체크"""
         # 1) 최대 주문 금액 제한
@@ -46,15 +52,13 @@ class RiskGuard:
             )
 
         # 2) 잔고 부족
-        if amount_krw * (1 + broker.COMMISSION_RATE) > broker.balance_krw:
+        if amount_krw * (1 + self.COMMISSION_RATE) > balance_krw:
             return RiskCheckResult(
                 allowed=False,
-                reason=f"잔고 부족: 필요 {amount_krw:,.0f}, 가용 {broker.balance_krw:,.0f} KRW",
+                reason=f"잔고 부족: 필요 {amount_krw:,.0f}, 가용 {balance_krw:,.0f} KRW",
             )
 
         # 3) 동시 보유 종목 수 제한
-        active_positions = sum(1 for p in broker.positions.values() if p.quantity > 0)
-        already_holding = symbol in broker.positions and broker.positions[symbol].quantity > 0
         if not already_holding and active_positions >= self.max_positions:
             return RiskCheckResult(
                 allowed=False,
@@ -74,14 +78,13 @@ class RiskGuard:
         return RiskCheckResult(allowed=True, reason="통과")
 
     def check_stop_loss_take_profit(
-        self, symbol: str, broker: PaperBroker, current_price: float,
+        self, symbol: str, avg_price: float, quantity: float, current_price: float,
     ) -> str | None:
         """손절/익절 조건 확인. 해당되면 'stop_loss' 또는 'take_profit' 반환."""
-        pos = broker.positions.get(symbol)
-        if not pos or pos.quantity <= 0 or pos.avg_price <= 0:
+        if quantity <= 0 or avg_price <= 0:
             return None
 
-        pnl_pct = (current_price - pos.avg_price) / pos.avg_price * 100
+        pnl_pct = (current_price - avg_price) / avg_price * 100
 
         if pnl_pct <= self.stop_loss_pct:
             logger.warning(
