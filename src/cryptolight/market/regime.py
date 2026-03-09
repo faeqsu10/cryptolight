@@ -93,11 +93,11 @@ class MarketRegime:
         if len(tr_list) < n:
             return 0.0
 
-        # Wilder smoothing
+        # Wilder smoothing (EMA 방식: 초기값 = 평균, 이후 prev*(1-1/n) + val/n)
         def wilder_smooth(values: list[float], period: int) -> list[float]:
-            result = [sum(values[:period])]
+            result = [sum(values[:period]) / period]
             for v in values[period:]:
-                result.append(result[-1] - result[-1] / period + v)
+                result.append(result[-1] + (v - result[-1]) / period)
             return result
 
         atr = wilder_smooth(tr_list, n)
