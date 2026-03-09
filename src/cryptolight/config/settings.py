@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     trade_mode: str = "paper"  # paper | live
     max_order_amount_krw: int = 50_000
     daily_loss_limit_krw: int = 100_000
+    max_positions: int = 5
+    stop_loss_pct: float = -5.0
+    take_profit_pct: float = 10.0
     target_symbols: str = "KRW-BTC,KRW-ETH"
 
     # 로깅

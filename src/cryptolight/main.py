@@ -1,9 +1,10 @@
-"""cryptolight 진입점 - 전략 실행, 시그널 알림, paper trading"""
+"""cryptolight 진입점 - 전략 실행, 시그널 알림, paper trading, 리스크 관리"""
 
 from cryptolight.bot.telegram_bot import TelegramBot
 from cryptolight.config import get_settings
 from cryptolight.exchange.upbit import UpbitClient
 from cryptolight.execution.paper_broker import PaperBroker
+from cryptolight.risk.risk_guard import RiskGuard
 from cryptolight.storage.repository import TradeRepository
 from cryptolight.strategy.rsi import RSIStrategy
 from cryptolight.utils import setup_logger
@@ -13,6 +14,7 @@ def run_strategy(
     client: UpbitClient,
     bot: TelegramBot | None,
     broker: PaperBroker | None,
+    risk_guard: RiskGuard | None,
     symbols: list[str],
     settings,
 ):
@@ -29,6 +31,26 @@ def run_strategy(
             symbol, f"{ticker.price:,.0f}", ticker.change_rate * 100,
         )
 
+        # 손절/익절 체크 (전략 분석 전에 먼저 확인)
+        if broker and risk_guard:
+            sl_tp = risk_guard.check_stop_loss_take_profit(symbol, broker, ticker.price)
+            if sl_tp == "stop_loss":
+                pos = broker.positions[symbol]
+                order = broker.sell_market(symbol, pos.quantity, ticker.price, reason="손절 트리거")
+                if order:
+                    logger.warning("손절 매도 실행: %s %.8f @ %s", symbol, pos.quantity, f"{ticker.price:,.0f}")
+                    if bot:
+                        bot.send_message(f"🔴 <b>손절 매도</b>\n{symbol} @ {ticker.price:,.0f} KRW")
+                continue
+            elif sl_tp == "take_profit":
+                pos = broker.positions[symbol]
+                order = broker.sell_market(symbol, pos.quantity, ticker.price, reason="익절 트리거")
+                if order:
+                    logger.info("익절 매도 실행: %s %.8f @ %s", symbol, pos.quantity, f"{ticker.price:,.0f}")
+                    if bot:
+                        bot.send_message(f"🟢 <b>익절 매도</b>\n{symbol} @ {ticker.price:,.0f} KRW")
+                continue
+
         # 전략 분석
         signal = strategy.analyze(candles)
         signal.symbol = symbol
@@ -41,6 +63,15 @@ def run_strategy(
 
         # Paper trading 실행
         if broker and signal.action == "buy":
+            # 리스크 체크
+            if risk_guard:
+                check = risk_guard.check_buy(symbol, settings.max_order_amount_krw, broker)
+                if not check.allowed:
+                    logger.warning("매수 차단: %s — %s", symbol, check.reason)
+                    if bot:
+                        bot.send_message(f"⚠️ <b>매수 차단</b>\n{symbol}: {check.reason}")
+                    continue
+
             order = broker.buy_market(
                 symbol, settings.max_order_amount_krw, ticker.price, reason=signal.reason,
             )
@@ -93,14 +124,30 @@ def main():
     # Paper trading 초기화
     broker = None
     repo = None
+    risk_guard = None
     if settings.trade_mode == "paper":
         repo = TradeRepository()
         broker = PaperBroker(initial_balance=1_000_000, repo=repo)
+        risk_guard = RiskGuard(
+            max_order_amount_krw=settings.max_order_amount_krw,
+            daily_loss_limit_krw=settings.daily_loss_limit_krw,
+            max_positions=settings.max_positions,
+            stop_loss_pct=settings.stop_loss_pct,
+            take_profit_pct=settings.take_profit_pct,
+            repo=repo,
+        )
         logger.info("Paper trading 초기화: 초기 자금 %s KRW", f"{broker.initial_balance:,.0f}")
+        logger.info(
+            "리스크 설정: 최대주문 %s, 일일손실한도 %s, 손절 %s%%, 익절 %s%%",
+            f"{settings.max_order_amount_krw:,.0f}",
+            f"{settings.daily_loss_limit_krw:,.0f}",
+            settings.stop_loss_pct,
+            settings.take_profit_pct,
+        )
 
     try:
         with UpbitClient(settings.upbit_access_key, settings.upbit_secret_key) as client:
-            run_strategy(client, bot, broker, settings.symbol_list, settings)
+            run_strategy(client, bot, broker, risk_guard, settings.symbol_list, settings)
     finally:
         if bot:
             bot.close()
