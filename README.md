@@ -1,6 +1,6 @@
 # cryptolight
 
-업비트 기반 코인 자동매매 봇. 전략 분석, 시그널 알림, paper/live trading, 백테스트를 지원한다.
+업비트 기반 코인 자동매매 봇. 멀티팩터 스코어 전략, 시장 국면 감지, AI 어시스턴트, 자기개선 루프를 지원한다.
 
 ## 설치
 
@@ -10,177 +10,177 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## 환경 설정 (.env)
+## 환경 설정
 
-```env
-# 업비트 API (https://upbit.com/mypage/open_api_management)
-UPBIT_ACCESS_KEY=your_access_key
-UPBIT_SECRET_KEY=your_secret_key
+`.env.example`을 복사하여 `.env`를 생성하고 값을 채운다.
 
-# 텔레그램 봇 (https://t.me/BotFather)
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_CHAT_ID=your_chat_id
-
-# 거래 설정
-TRADE_MODE=paper                # paper | live (Literal 검증)
-MAX_ORDER_AMOUNT_KRW=50000      # 1회 최대 주문 금액
-ABSOLUTE_MAX_ORDER_KRW=500000   # Live 하드캡 (최종 안전장치)
-DAILY_LOSS_LIMIT_KRW=100000     # 일일 손실 한도
-MAX_POSITIONS=5                 # 동시 보유 종목 수
-STOP_LOSS_PCT=-5.0              # 손절 기준 (%)
-TAKE_PROFIT_PCT=10.0            # 익절 기준 (%)
-TRAILING_STOP_PCT=0.0           # 트레일링 스톱 (0=비활성, 3.0=고점 대비 -3%)
-TARGET_SYMBOLS=KRW-BTC,KRW-ETH  # 대상 종목
-
-# 전략
-STRATEGY_NAME=rsi               # rsi | macd | bollinger | volatility_breakout | ensemble
-ENSEMBLE_STRATEGIES=rsi,macd,bollinger  # 앙상블 사용 시 전략 조합
-
-# 스케줄러
-SCHEDULE_INTERVAL_MINUTES=5     # 실행 주기 (0이면 1회 실행)
-COMMAND_POLL_SECONDS=30         # 텔레그램 명령어 폴링 주기
-PAPER_INITIAL_BALANCE=1000000   # Paper 초기 자금 (KRW)
-DB_PATH=data/trades.db          # SQLite DB 경로 (WAL 모드)
-
-# 알림
-SURGE_ALERT_THRESHOLD=0.05      # 급등/급락 알림 기준 (5%)
-LOG_LEVEL=INFO
-LOG_FILE=                       # 파일 로깅 경로 (빈값=비활성, 예: logs/cryptolight.log)
-
-# 백테스트
-BACKTEST_SLIPPAGE_PCT=0.1       # 슬리피지 (0.1%)
-BACKTEST_SPREAD_PCT=0.05        # 스프레드 (0.05%)
+```bash
+cp .env.example .env
 ```
+
+주요 설정 항목:
+
+| 항목 | 설명 | 기본값 |
+|------|------|--------|
+| `UPBIT_ACCESS_KEY` | 업비트 API Access Key | (필수) |
+| `UPBIT_SECRET_KEY` | 업비트 API Secret Key | (필수) |
+| `TELEGRAM_BOT_TOKEN` | 텔레그램 봇 토큰 | (필수) |
+| `TELEGRAM_CHAT_ID` | 텔레그램 채팅 ID | (필수) |
+| `TRADE_MODE` | 거래 모드 (`paper` / `live`) | `paper` |
+| `STRATEGY_NAME` | 매매 전략 | `score` |
+| `TARGET_SYMBOLS` | 대상 종목 | `KRW-BTC,KRW-ETH` |
+| `GOOGLE_API_KEY` | Gemini AI API 키 (/ask용) | (선택) |
+| `GEMINI_MODEL` | Gemini 모델명 | `gemini-2.5-flash` |
+
+전체 설정 항목은 `src/cryptolight/config/settings.py`를 참고.
+
+> **보안 주의**: `.env` 파일에는 API 키가 포함됩니다. 절대 Git에 커밋하지 마세요. `.gitignore`에 이미 포함되어 있습니다.
 
 ## 실행
 
-### 스케줄러 모드 (기본)
-
-5분마다 자동으로 시세 분석 + 매매 판단을 반복한다.
-
 ```bash
+# 스케줄러 모드 (5분마다 자동 분석)
 python -m cryptolight.main
-```
 
-### 1회 실행 모드
-
-```bash
+# 1회 실행
 python -m cryptolight.main --once
 ```
 
-### 전략 변경
+## 매매 전략
+
+### Score (기본, 권장)
+
+멀티팩터 스코어 기반 전략. 여러 지표가 동시에 같은 방향을 가리킬 때만 매매한다.
+
+**매수/매도 팩터 (6개, 100점 만점)**:
+
+| 팩터 | 매수 조건 | 매도 조건 | 점수 |
+|------|----------|----------|------|
+| RSI(14) | RSI <= 35 | RSI >= 65 | 25 |
+| RSI 방향 | 반등 시작 | 하락 시작 | 10 |
+| MACD | 골든크로스 | 데드크로스 | 25 |
+| MACD 모멘텀 | 히스토그램 증가 | 히스토그램 감소 | 10 |
+| 볼린저밴드 | 하단 터치 | 상단 터치 | 20 |
+| 거래량 | 평균 이상 | 평균 이상 | 10 |
+
+**시장 국면별 자동 조정**:
+
+| 국면 | 특징 | MACD 가중치 | BB 가중치 | 매수 임계값 |
+|------|------|-----------|----------|-----------|
+| 추세장 (trending) | ADX >= 25 | 1.5x | 0.5x | 55점 |
+| 횡보장 (sideways) | ADX < 25, 변동 낮음 | 0.5x | 1.5x | 65점 |
+| 변동장 (volatile) | BB 폭 >= 6% | 1.0x | 1.0x | 75점 |
+
+**안전 장치**:
+- confidence 게이트: 신뢰도 40% 미만 시 주문 자동 차단
+- 거래량 부족 시 시그널 무시
+
+### 기타 전략
 
 ```bash
-# MACD 전략
-STRATEGY_NAME=macd python -m cryptolight.main
-
-# 볼린저밴드
-STRATEGY_NAME=bollinger python -m cryptolight.main
-
-# 변동성 돌파
-STRATEGY_NAME=volatility_breakout python -m cryptolight.main
-
-# 앙상블 (RSI + MACD + 볼린저 다수결 투표)
-STRATEGY_NAME=ensemble python -m cryptolight.main
-```
-
-### 백테스트
-
-```bash
-# BTC 1년 RSI 백테스트
-python -m cryptolight.backtest --symbol KRW-BTC --strategy rsi --days 365
-
-# ETH MACD 백테스트 + 텔레그램 전송
-python -m cryptolight.backtest --symbol KRW-ETH --strategy macd --days 180 --telegram
-
-# 초기 자금/주문 금액 지정
-python -m cryptolight.backtest --symbol KRW-BTC --strategy ensemble --balance 5000000 --amount 100000
+STRATEGY_NAME=rsi python -m cryptolight.main        # RSI 단독
+STRATEGY_NAME=macd python -m cryptolight.main       # MACD 단독
+STRATEGY_NAME=bollinger python -m cryptolight.main  # 볼린저밴드
+STRATEGY_NAME=ensemble python -m cryptolight.main   # 다수결 앙상블
 ```
 
 ## 텔레그램 명령어
 
 | 명령어 | 설명 |
 |--------|------|
-| `/status` | 현재 상태 조회 |
-| `/report` | 일일 요약 리포트 즉시 전송 |
+| `/info` | 시장 상태 (RSI, 국면, 매수/매도 조건) + 초보자 해설 |
+| `/ask <질문>` | AI에게 질문 (Gemini, 일일 10회 제한) |
+| `/status` | 봇 상태 조회 |
+| `/report` | 일일 요약 리포트 |
+| `/mute` | 자동 알림 끄기 (시그널, 급등/급락) |
+| `/unmute` | 자동 알림 켜기 |
 | `/stop` | 긴급 거래 중지 (킬스위치) |
 | `/help` | 명령어 목록 |
 
-## 전략
-
-### RSI (기본)
-- Wilder smoothing(EMA) 방식 RSI 14
-- RSI <= 30: 매수, RSI >= 70: 매도
-
-### MACD
-- EMA(12) - EMA(26), Signal EMA(9)
-- 골든크로스: 매수, 데드크로스: 매도
-
-### 볼린저밴드
-- 20일 이동평균, 표준편차 x 2.5
-- 하단 터치: 매수 (mean reversion), 상단 터치: 매도
-
-### 변동성 돌파
-- Larry Williams 변동성 돌파 (k=0.5)
-- 당일 시가 + 전일 변동폭 * k 돌파 시 매수
-
-### 앙상블
-- 여러 전략의 시그널을 다수결 투표로 결합
-- 2/3 이상 동의 시 매매, 동률이면 관망
-
-## Docker
+## 백테스트
 
 ```bash
-# 빌드 & 실행
-docker compose up -d
+# BTC 1년 스코어 전략 백테스트
+python -m cryptolight.backtest --symbol KRW-BTC --strategy score --days 365
 
-# 로그 확인
-docker compose logs -f
+# ETH MACD 백테스트 + 텔레그램 전송
+python -m cryptolight.backtest --symbol KRW-ETH --strategy macd --days 180 --telegram
+
+# Walk-Forward 검증 (과적합 방지)
+python -m cryptolight.backtest --symbol KRW-BTC --strategy score --days 365 --walk-forward
 ```
+
+## 자기개선 루프
+
+매주 일요일 03:00 KST에 자동 실행 (`ENABLE_AUTO_OPTIMIZATION=true` 설정 시):
+
+1. **성과 평가** — Sharpe ratio, 승률, MDD 분석
+2. **전략 경쟁** — 다중 전략 백테스트 비교 (Arena)
+3. **파라미터 최적화** — Random Search + Walk-Forward 검증
+4. **자동 전환** — Sharpe 개선폭 >= 0.5일 때 전략 교체
+5. **롤백** — 전환 후 성과 악화 시 이전 전략으로 복원
 
 ## 리스크 관리
 
-- 1회 최대 주문 금액 제한
-- Live 모드 하드캡 (ABSOLUTE_MAX_ORDER_KRW)
+- 1회 최대 주문 금액 제한 + Live 하드캡
 - 동시 보유 종목 수 제한
 - 일일 손실 한도 (초과 시 매수 차단)
-- 자동 손절/익절 트리거
-- 트레일링 스톱 (고점 대비 N% 하락 시 매도)
-- Live 주문 체결 검증 (get_order 재조회)
-- 중복 시그널 방지
-- API 장애 시 지수 백오프 재시도 (최대 3회)
+- 자동 손절/익절/트레일링 스톱
+- confidence 게이트 (낮은 신뢰도 시그널 차단)
+- 중복 시그널 방지 + 매매 쿨다운
+- API 장애 시 지수 백오프 재시도 (주문 API는 재시도 안 함)
 - SQLite WAL 모드 + 스레드 안전
 
 ## 프로젝트 구조
 
 ```
 src/cryptolight/
-  main.py              # 진입점 (스케줄러, 전략 실행 흐름)
-  config/settings.py   # 환경 설정 (pydantic-settings)
+  main.py                  # 진입점 (스케줄러, 전략 실행)
+  config/settings.py       # 환경 설정 (pydantic-settings)
   exchange/
-    base.py            # 거래소 추상 인터페이스
-    upbit.py           # 업비트 REST 클라이언트
+    base.py                # 거래소 추상 인터페이스
+    upbit.py               # 업비트 REST 클라이언트
+    candle_cache.py        # 캔들 캐시 (TTL)
   strategy/
-    base.py            # BaseStrategy + Signal
-    rsi.py             # RSI 전략
-    macd.py            # MACD 전략
-    bollinger.py       # 볼린저밴드 전략
-    volatility_breakout.py  # 변동성 돌파 전략
-    ensemble.py        # 앙상블 전략
+    base.py                # BaseStrategy + Signal
+    score_based.py         # 멀티팩터 스코어 전략 (기본)
+    rsi.py / macd.py / bollinger.py  # 개별 전략
+    ensemble.py            # 앙상블 (다수결)
+    volume_filter.py       # 거래량 필터
+  market/
+    regime.py              # 시장 국면 감지 (ADX + BB)
   execution/
-    base.py            # BaseBroker 인터페이스
-    paper_broker.py    # Paper Trading 브로커
-    live_broker.py     # 업비트 실거래 브로커
+    paper_broker.py        # Paper Trading
+    live_broker.py         # 업비트 실거래
   risk/
-    risk_guard.py      # 리스크 관리 모듈
+    risk_guard.py          # 손절/익절/리스크 체크
+    position_sizer.py      # 포지션 사이징 (fixed/percent/kelly)
+  evaluation/
+    performance.py         # 성과 평가 (Sharpe, MDD)
+    arena.py               # 전략 경쟁
+    optimizer.py           # 파라미터 최적화
+    controller.py          # 자동 전략 전환
   storage/
-    models.py          # TradeRecord, PositionSnapshot
-    repository.py      # SQLite 거래/포지션 저장소
+    repository.py          # SQLite 거래/포지션 저장소
+    strategy_tracker.py    # 전략별 성과 추적
   bot/
-    telegram_bot.py    # 텔레그램 알림
-    command_handler.py # 텔레그램 명령어 처리
+    telegram_bot.py        # 텔레그램 알림
+    command_handler.py     # 텔레그램 명령어 처리
+    ai_assistant.py        # Gemini AI 어시스턴트
   backtest/
-    engine.py          # 백테스트 엔진
-    data_loader.py     # 과거 캔들 데이터 로더
-    __main__.py        # 백테스트 CLI
+    engine.py              # 백테스트 엔진
+    walk_forward.py        # Walk-Forward 검증
+  health.py                # 헬스 모니터
 ```
+
+## 테스트
+
+```bash
+pytest                # 전체 테스트 (136개)
+ruff check src/       # 린트
+ruff format src/      # 포맷
+```
+
+## 라이선스
+
+MIT
