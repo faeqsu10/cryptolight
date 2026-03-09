@@ -146,6 +146,38 @@ class TradeRepository:
 
         return positions, balance_krw
 
+    def get_strategy_aggregates(self) -> list[dict]:
+        """전략별 집계 통계를 반환한다."""
+        rows = self._conn.execute("""
+            SELECT
+                strategy,
+                COUNT(*) as trade_count,
+                SUM(CASE WHEN side='buy' THEN amount_krw ELSE 0 END) as total_bought,
+                SUM(CASE WHEN side='sell' THEN amount_krw ELSE 0 END) as total_sold,
+                SUM(commission) as total_commission
+            FROM trades
+            WHERE strategy != '' AND strategy IS NOT NULL
+            GROUP BY strategy
+            ORDER BY trade_count DESC
+        """).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_strategy_sell_pairs(self, strategy: str) -> list[dict]:
+        """특정 전략의 매도 건별 직전 매수 가격을 반환한다."""
+        rows = self._conn.execute("""
+            SELECT t1.price as sell_price,
+                   (SELECT t2.price FROM trades t2
+                    WHERE t2.symbol = t1.symbol
+                      AND t2.side = 'buy'
+                      AND t2.id < t1.id
+                      AND t2.strategy = t1.strategy
+                    ORDER BY t2.id DESC LIMIT 1) as buy_price
+            FROM trades t1
+            WHERE t1.side = 'sell' AND t1.strategy = ?
+            ORDER BY t1.id
+        """, (strategy,)).fetchall()
+        return [dict(row) for row in rows]
+
     def close(self):
         self._conn.close()
 

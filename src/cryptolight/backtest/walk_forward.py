@@ -1,5 +1,6 @@
 """Walk-Forward Validation — 과적합 방지 백테스트"""
 
+import copy
 import logging
 from dataclasses import dataclass, field
 
@@ -89,17 +90,27 @@ class WalkForwardValidator:
             if len(in_sample) < self.strategy.required_candle_count() or len(out_sample) < self.strategy.required_candle_count():
                 continue
 
-            engine = BacktestEngine(
-                strategy=self.strategy,
+            fold_strategy = copy.deepcopy(self.strategy)
+            is_engine = BacktestEngine(
+                strategy=fold_strategy,
                 initial_balance=self.initial_balance,
                 order_amount=self.order_amount,
                 commission_rate=self.commission_rate,
                 slippage_pct=self.slippage_pct,
                 spread_pct=self.spread_pct,
             )
+            is_result = is_engine.run(in_sample)
 
-            is_result = engine.run(in_sample)
-            oos_result = engine.run(out_sample)
+            oos_strategy = copy.deepcopy(self.strategy)
+            oos_engine = BacktestEngine(
+                strategy=oos_strategy,
+                initial_balance=self.initial_balance,
+                order_amount=self.order_amount,
+                commission_rate=self.commission_rate,
+                slippage_pct=self.slippage_pct,
+                spread_pct=self.spread_pct,
+            )
+            oos_result = oos_engine.run(out_sample)
 
             folds.append(WalkForwardFold(
                 fold=i + 1,
@@ -114,7 +125,11 @@ class WalkForwardValidator:
 
         avg_is = sum(f.in_sample_result.total_return_pct for f in folds) / len(folds)
         avg_oos = sum(f.out_sample_result.total_return_pct for f in folds) / len(folds)
-        overfit = abs(avg_is / avg_oos) if avg_oos != 0 else float("inf")
+        # IS/OOS 비율: 부호 보존하여 OOS 손실 시 음수 반환
+        if avg_oos != 0:
+            overfit = avg_is / avg_oos
+        else:
+            overfit = float("inf") if avg_is > 0 else 0.0
         consistency = sum(1 for f in folds if f.out_sample_result.total_return_pct > 0) / len(folds) * 100
 
         result = WalkForwardResult(
