@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     surge_alert_threshold: float = 0.05  # 5% 이상 변동 시 알림
 
     # 전략
-    strategy_name: str = "rsi"  # rsi | volatility_breakout
+    strategy_name: str = "rsi"  # rsi | volatility_breakout | ensemble
+    ensemble_strategies: str = "rsi,macd,bollinger"  # 앙상블에 사용할 전략 목록
 
     # 로깅
     log_level: str = "INFO"
@@ -41,6 +42,10 @@ class Settings(BaseSettings):
     @property
     def symbol_list(self) -> list[str]:
         return [s.strip() for s in self.target_symbols.split(",") if s.strip()]
+
+    @property
+    def ensemble_strategy_list(self) -> list[str]:
+        return [s.strip() for s in self.ensemble_strategies.split(",") if s.strip()]
 
 
 @lru_cache

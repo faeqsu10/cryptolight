@@ -15,7 +15,7 @@ from cryptolight.execution.live_broker import LiveBroker
 from cryptolight.execution.paper_broker import PaperBroker
 from cryptolight.risk.risk_guard import RiskGuard
 from cryptolight.storage.repository import TradeRepository
-from cryptolight.strategy.rsi import RSIStrategy
+from cryptolight.strategy import create_strategy
 from cryptolight.utils import setup_logger
 
 # 중복 시그널 방지: symbol -> action
@@ -32,7 +32,10 @@ def run_strategy(
 ):
     """각 종목에 대해 전략을 실행하고 시그널을 전송한다."""
     logger = setup_logger("cryptolight.main")
-    strategy = RSIStrategy(period=14, oversold=30, overbought=70)
+    if settings.strategy_name == "ensemble":
+        strategy = create_strategy("ensemble", strategy_names=settings.ensemble_strategy_list)
+    else:
+        strategy = create_strategy(settings.strategy_name)
 
     for symbol in symbols:
         candles = client.get_candles(symbol, interval="day", count=strategy.required_candle_count() * 2)
@@ -42,6 +45,10 @@ def run_strategy(
             "%s 현재가: %s KRW (변동: %+.2f%%)",
             symbol, f"{ticker.price:,.0f}", ticker.change_rate * 100,
         )
+
+        # 급등/급락 알림
+        if bot and abs(ticker.change_rate) >= settings.surge_alert_threshold:
+            bot.send_surge_alert(symbol, ticker.price, ticker.change_rate)
 
         # 손절/익절 체크 (paper 모드만 — live는 포지션을 broker가 관리하지 않음)
         if isinstance(broker, PaperBroker) and risk_guard:
@@ -181,7 +188,39 @@ def strategy_job(
         logger.exception("전략 실행 중 에러 발생 — 이번 주기 스킵")
 
 
-def command_job(cmd_handler: CommandHandler, scheduler: BlockingScheduler, bot: TelegramBot | None):
+def daily_summary_job(
+    bot: TelegramBot,
+    broker: BaseBroker | None,
+    repo: TradeRepository,
+    client: UpbitClient,
+    symbols: list[str],
+):
+    """매일 09:00 KST에 실행되는 일일 요약 job"""
+    logger = setup_logger("cryptolight.main")
+    try:
+        pnl_data = repo.get_daily_pnl()
+        positions_summary = ""
+        if isinstance(broker, PaperBroker):
+            prices = {}
+            for symbol in symbols:
+                ticker = client.get_ticker(symbol)
+                prices[symbol] = ticker.price
+            positions_summary = broker.summary_text(prices)
+        bot.send_daily_summary(pnl_data, positions_summary)
+        logger.info("일일 요약 전송 완료")
+    except Exception:
+        logger.exception("일일 요약 전송 실패")
+
+
+def command_job(
+    cmd_handler: CommandHandler,
+    scheduler: BlockingScheduler,
+    bot: TelegramBot | None,
+    broker: BaseBroker | None = None,
+    repo: TradeRepository | None = None,
+    client: UpbitClient | None = None,
+    symbols: list[str] | None = None,
+):
     """명령어 폴링 job. 킬스위치 감지 시 스케줄러 종료."""
     logger = setup_logger("cryptolight.main")
     try:
@@ -191,6 +230,9 @@ def command_job(cmd_handler: CommandHandler, scheduler: BlockingScheduler, bot: 
             if bot:
                 bot.send_message("\u26d4 킬스위치 활성 — 봇을 종료합니다.")
             scheduler.shutdown(wait=False)
+        if cmd_handler.report_requested and bot and repo and client and symbols:
+            daily_summary_job(bot, broker, repo, client, symbols)
+            cmd_handler.reset_report()
     except Exception:
         logger.exception("명령어 폴링 중 에러 발생")
 
@@ -296,8 +338,18 @@ def main():
             "interval",
             seconds=settings.command_poll_seconds,
             max_instances=1,
-            args=[cmd_handler, scheduler, bot],
+            args=[cmd_handler, scheduler, bot, broker, repo, client, settings.symbol_list],
             id="command_poll",
+        )
+
+    if bot:
+        scheduler.add_job(
+            daily_summary_job,
+            "cron",
+            hour=9,
+            minute=0,
+            args=[bot, broker, repo, client, settings.symbol_list],
+            id="daily_summary",
         )
 
     # Graceful shutdown

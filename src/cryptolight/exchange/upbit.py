@@ -136,7 +136,8 @@ class UpbitClient(ExchangeClient):
     # ── 시세 ──
 
     def get_candles(
-        self, symbol: str, interval: str = "day", count: int = 200
+        self, symbol: str, interval: str = "day", count: int = 200,
+        to: str | None = None,
     ) -> list[Candle]:
         if interval == "day":
             path = "/candles/days"
@@ -148,6 +149,9 @@ class UpbitClient(ExchangeClient):
         else:
             path = "/candles/days"
             params = {"market": symbol, "count": min(count, 200)}
+
+        if to:
+            params["to"] = to
 
         data = self._get(path, params=params)
         candles = [

@@ -56,7 +56,8 @@ class ExchangeClient(ABC):
 
     @abstractmethod
     def get_candles(
-        self, symbol: str, interval: str = "day", count: int = 200
+        self, symbol: str, interval: str = "day", count: int = 200,
+        to: str | None = None,
     ) -> list[Candle]:
         ...
 

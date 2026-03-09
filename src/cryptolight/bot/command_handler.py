@@ -17,10 +17,18 @@ class CommandHandler:
         self._client = httpx.Client(timeout=10.0)
         self._last_update_id = 0
         self._kill_switch = False
+        self._report_requested = False
 
     @property
     def kill_switch(self) -> bool:
         return self._kill_switch
+
+    @property
+    def report_requested(self) -> bool:
+        return self._report_requested
+
+    def reset_report(self):
+        self._report_requested = False
 
     def poll_commands(self) -> list[str]:
         """새 명령어를 폴링한다. 명령어 목록 반환."""
@@ -63,10 +71,14 @@ class CommandHandler:
             logger.warning("킬스위치 활성화: /stop 명령")
         elif cmd == "/status":
             self._send("상태 조회는 다음 실행 주기에 응답합니다.")
+        elif cmd == "/report":
+            self._report_requested = True
+            self._send("일일 요약을 생성 중입니다...")
         elif cmd == "/help":
             self._send(
                 "<b>명령어 목록</b>\n"
                 "/status — 현재 상태 조회\n"
+                "/report — 일일 요약 리포트\n"
                 "/stop — 긴급 거래 중지\n"
                 "/help — 도움말"
             )
