@@ -613,6 +613,7 @@ def main():
             "interval",
             seconds=settings.command_poll_seconds,
             max_instances=1,
+            misfire_grace_time=30,
             args=[cmd_handler, scheduler, bot, broker, repo, client, settings.symbol_list, settings],
             id="command_poll",
         )
