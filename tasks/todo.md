@@ -27,3 +27,18 @@
 - [x] 텔레그램 명령어 추가 (/status, /stop, /help)
 - [x] 킬스위치 (긴급 정지) 구현
 - [x] main.py paper/live 모드 통합
+
+## 6단계: Phase 2 확장 ✅
+- [x] APScheduler 스케줄러 (5분 간격 반복 실행, --once 모드)
+- [x] SIGTERM/SIGINT graceful shutdown
+- [x] 텔레그램 명령어 30초 폴링 (별도 job)
+- [x] 중복 시그널 방지
+- [x] PaperBroker 포지션/잔고 SQLite 영속화
+- [x] RSI Wilder smoothing(EMA) 정확도 개선
+- [x] 변동성 돌파 전략 추가 (strategy_name 설정)
+- [x] 전략 팩토리 함수
+- [x] API 지수 백오프 재시도 (429/5xx 대응)
+- [x] BaseBroker 공통 인터페이스
+- [x] RiskGuard broker 타입 독립
+- [x] 급등/급락 알림, 일일 요약 강화
+- [x] Settings 통합 (스케줄러/전략/알림/DB경로)
