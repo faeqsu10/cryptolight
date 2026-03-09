@@ -42,6 +42,7 @@ _regime_detector: MarketRegime | None = None
 _volume_filter: VolumeFilter | None = None
 _market_snapshots: dict[str, dict] = {}
 _ai_assistant: AIAssistant | None = None
+_cmd_handler: CommandHandler | None = None
 
 
 def run_strategy(
@@ -75,9 +76,10 @@ def run_strategy(
             symbol, f"{ticker.price:,.0f}", ticker.change_rate * 100,
         )
 
-        # 급등/급락 알림
+        # 급등/급락 알림 (음소거 시 건너뜀)
         if bot and abs(ticker.change_rate) >= settings.surge_alert_threshold:
-            bot.send_surge_alert(symbol, ticker.price, ticker.change_rate)
+            if not (_cmd_handler and _cmd_handler.muted):
+                bot.send_surge_alert(symbol, ticker.price, ticker.change_rate)
 
         # 손절/익절 체크 (paper 모드만 — live는 포지션을 broker가 관리하지 않음)
         if isinstance(broker, PaperBroker) and risk_guard:
@@ -231,9 +233,12 @@ def run_strategy(
             "weight": regime_info["trade_weight"] if regime_info else 1.0,
         }
 
-        # 텔레그램 전송 (hold 제외)
+        # 텔레그램 전송 (hold 제외, 음소거 시 건너뜀)
         if bot and signal_result.action != "hold":
-            bot.send_signal(signal_result, price=ticker.price)
+            if not (_cmd_handler and _cmd_handler.muted):
+                bot.send_signal(signal_result, price=ticker.price)
+            else:
+                logger.info("알림 음소거 중 — 시그널 전송 생략")
         elif bot and signal_result.action == "hold":
             logger.info("관망 시그널 — 텔레그램 전송 생략")
 
@@ -546,7 +551,9 @@ def main():
     cmd_handler = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         bot = TelegramBot(settings.telegram_bot_token, settings.telegram_chat_id)
+        global _cmd_handler
         cmd_handler = CommandHandler(settings.telegram_bot_token, settings.telegram_chat_id)
+        _cmd_handler = cmd_handler
         bot.send_startup(settings.symbol_list, settings.trade_mode)
         logger.info("텔레그램 봇 연결됨")
     else:

@@ -21,6 +21,7 @@ class CommandHandler:
         self._status_requested = False
         self._info_requested = False
         self._ask_queue: list[str] = []
+        self._muted = False
         self._flush_old_updates()
 
     @property
@@ -38,6 +39,10 @@ class CommandHandler:
     @property
     def info_requested(self) -> bool:
         return self._info_requested
+
+    @property
+    def muted(self) -> bool:
+        return self._muted
 
     def reset_report(self):
         self._report_requested = False
@@ -126,14 +131,27 @@ class CommandHandler:
         elif cmd == "/info":
             self._info_requested = True
             self._send("시장 상태를 조회 중입니다...")
+        elif cmd == "/mute":
+            self._muted = True
+            self._send("🔇 알림이 꺼졌습니다. 자동 알림(시그널, 급등/급락)이 중지됩니다.\n명령어 응답은 정상 작동합니다.\n/unmute 로 다시 켤 수 있습니다.")
+            logger.info("알림 음소거 활성화")
+        elif cmd == "/unmute":
+            self._muted = False
+            self._send("🔔 알림이 켜졌습니다. 자동 알림이 다시 전송됩니다.")
+            logger.info("알림 음소거 해제")
         elif cmd == "/help":
+            mute_status = "🔇 꺼짐" if self._muted else "🔔 켜짐"
             self._send(
                 "<b>명령어 목록</b>\n"
                 "/info — 시장 상태 (RSI, 국면, 매수/매도 조건)\n"
+                "/ask — AI에게 질문하기\n"
                 "/status — 봇 상태 조회\n"
                 "/report — 일일 요약 리포트\n"
+                "/mute — 자동 알림 끄기\n"
+                "/unmute — 자동 알림 켜기\n"
                 "/stop — 긴급 거래 중지\n"
-                "/help — 도움말"
+                "/help — 도움말\n"
+                f"\n현재 알림: {mute_status}"
             )
         else:
             self._send(f"알 수 없는 명령어: {cmd}\n/help 로 목록을 확인하세요.")
