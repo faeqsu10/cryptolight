@@ -649,6 +649,7 @@ def main():
         "interval",
         minutes=settings.schedule_interval_minutes,
         max_instances=1,
+        misfire_grace_time=60,
         args=[client, bot, broker, risk_guard, settings.symbol_list, settings],
         id="strategy",
         next_run_time=None,  # 첫 실행은 아래에서 즉시 수행
