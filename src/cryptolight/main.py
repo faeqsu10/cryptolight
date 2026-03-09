@@ -39,6 +39,7 @@ _position_sizer: PositionSizer | None = None
 _health: HealthMonitor | None = None
 _regime_detector: MarketRegime | None = None
 _volume_filter: VolumeFilter | None = None
+_market_snapshots: dict[str, dict] = {}
 
 
 def run_strategy(
@@ -217,22 +218,46 @@ def run_strategy(
                 else:
                     logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
 
+        # 시장 상태 수집 (텔레그램 요약용)
+        _market_snapshots[symbol] = {
+            "price": ticker.price,
+            "change": ticker.change_rate * 100,
+            "rsi": signal_result.indicators.get("rsi"),
+            "action": signal_result.action,
+            "regime": regime_info["regime"] if regime_info else "N/A",
+            "adx": regime_info["adx"] if regime_info else 0,
+            "weight": regime_info["trade_weight"] if regime_info else 1.0,
+        }
+
         # 텔레그램 전송 (hold 제외)
         if bot and signal_result.action != "hold":
             bot.send_signal(signal_result, price=ticker.price)
         elif bot and signal_result.action == "hold":
             logger.info("관망 시그널 — 텔레그램 전송 생략")
 
-    # Paper trading 요약
+    # Paper trading 요약 + 시장 상태
     if isinstance(broker, PaperBroker):
         prices = {}
         for symbol in symbols:
             ticker = client.get_ticker(symbol)
             prices[symbol] = ticker.price
         summary = broker.summary_text(prices)
+
+        # 시장 상태 라인 추가
+        market_lines = []
+        for sym, snap in _market_snapshots.items():
+            rsi_val = f"{snap['rsi']:.1f}" if snap['rsi'] else "N/A"
+            market_lines.append(
+                f"{sym}: RSI={rsi_val} | {snap['regime']}(ADX={snap['adx']:.0f}) | {snap['change']:+.1f}%"
+            )
+        market_text = "\n".join(market_lines)
+
         logger.info("=== Paper Trading 현황 ===\n%s", summary)
         if bot:
-            bot.send_message(f"\U0001f4b0 <b>Paper Trading 현황</b>\n<pre>{summary}</pre>")
+            bot.send_message(
+                f"\U0001f4b0 <b>Paper Trading 현황</b>\n<pre>{html_mod.escape(summary)}</pre>"
+                f"\n\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(market_text)}</pre>"
+            )
 
 
 def strategy_job(
@@ -360,6 +385,39 @@ def self_improvement_job(
         logger.exception("자기개선 루프 실행 중 에러")
 
 
+def _send_market_info(bot: TelegramBot, settings) -> None:
+    """현재 시장 상태를 텔레그램으로 전송한다."""
+    if not _market_snapshots:
+        bot.send_message("아직 시장 데이터가 없습니다. 다음 주기까지 대기해주세요.")
+        return
+
+    lines = []
+    for sym, snap in _market_snapshots.items():
+        rsi_val = snap.get("rsi")
+        rsi_str = f"{rsi_val:.1f}" if rsi_val else "N/A"
+        regime = snap.get("regime", "N/A")
+        adx = snap.get("adx", 0)
+        price = snap.get("price", 0)
+        change = snap.get("change", 0)
+        action = snap.get("action", "hold")
+        weight = snap.get("weight", 1.0)
+
+        action_kr = {"buy": "매수", "sell": "매도", "hold": "관망"}.get(action, action)
+
+        lines.append(f"── {sym} ──")
+        lines.append(f"  현재가: {price:,.0f} KRW ({change:+.1f}%)")
+        lines.append(f"  RSI: {rsi_str} (매수≤30, 매도≥70)")
+        lines.append(f"  국면: {regime} (ADX={adx:.0f})")
+        lines.append(f"  가중치: {weight:.1f} | 판단: {action_kr}")
+
+    lines.append(f"\n전략: {settings.strategy_name}")
+    lines.append(f"주기: {settings.schedule_interval_minutes}분")
+
+    bot.send_message(
+        f"\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(chr(10).join(lines))}</pre>"
+    )
+
+
 def command_job(
     cmd_handler: CommandHandler,
     scheduler: BlockingScheduler,
@@ -368,6 +426,7 @@ def command_job(
     repo: TradeRepository | None = None,
     client: UpbitClient | None = None,
     symbols: list[str] | None = None,
+    settings=None,
 ):
     """명령어 폴링 job. 킬스위치 감지 시 스케줄러 종료."""
     logger = setup_logger("cryptolight.main")
@@ -385,6 +444,9 @@ def command_job(
             status_text = _health.summary_text() if _health else "헬스 모니터 미초기화"
             bot.send_message(f"\U0001f4cb <b>봇 상태</b>\n<pre>{status_text}</pre>")
             cmd_handler.reset_status()
+        if cmd_handler.info_requested and bot and settings:
+            _send_market_info(bot, settings)
+            cmd_handler.reset_info()
     except Exception:
         logger.exception("명령어 폴링 중 에러 발생")
 
@@ -515,7 +577,7 @@ def main():
             "interval",
             seconds=settings.command_poll_seconds,
             max_instances=1,
-            args=[cmd_handler, scheduler, bot, broker, repo, client, settings.symbol_list],
+            args=[cmd_handler, scheduler, bot, broker, repo, client, settings.symbol_list, settings],
             id="command_poll",
         )
 

@@ -19,6 +19,7 @@ class CommandHandler:
         self._kill_switch = False
         self._report_requested = False
         self._status_requested = False
+        self._info_requested = False
         self._flush_old_updates()
 
     @property
@@ -33,11 +34,18 @@ class CommandHandler:
     def status_requested(self) -> bool:
         return self._status_requested
 
+    @property
+    def info_requested(self) -> bool:
+        return self._info_requested
+
     def reset_report(self):
         self._report_requested = False
 
     def reset_status(self):
         self._status_requested = False
+
+    def reset_info(self):
+        self._info_requested = False
 
     def _flush_old_updates(self):
         """시작 시 밀려있던 옛 업데이트를 건너뛴다."""
@@ -100,10 +108,14 @@ class CommandHandler:
         elif cmd == "/report":
             self._report_requested = True
             self._send("일일 요약을 생성 중입니다...")
+        elif cmd == "/info":
+            self._info_requested = True
+            self._send("시장 상태를 조회 중입니다...")
         elif cmd == "/help":
             self._send(
                 "<b>명령어 목록</b>\n"
-                "/status — 현재 상태 조회\n"
+                "/info — 시장 상태 (RSI, 국면, 매수/매도 조건)\n"
+                "/status — 봇 상태 조회\n"
                 "/report — 일일 요약 리포트\n"
                 "/stop — 긴급 거래 중지\n"
                 "/help — 도움말"

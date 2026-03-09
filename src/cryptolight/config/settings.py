@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     strategy_name: str = "rsi"  # rsi | macd | bollinger | volatility_breakout | ensemble
     ensemble_strategies: str = "rsi,macd,bollinger"  # 앙상블에 사용할 전략 목록
 
+    # Google AI (Gemini)
+    google_api_key: str = ""
+    ask_daily_limit: int = 10  # /ask 일일 사용 제한
+
     # 로깅
     log_level: str = "INFO"
     log_file: str = ""  # 비어있으면 파일 로깅 비활성화, 경로 지정 시 RotatingFileHandler
