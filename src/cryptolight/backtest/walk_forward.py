@@ -70,6 +70,8 @@ class WalkForwardValidator:
 
     def run(self, candles: list[Candle], n_folds: int = 5) -> WalkForwardResult:
         """N개 구간으로 Walk-Forward Validation 실행."""
+        if n_folds < 2:
+            raise ValueError("n_folds must be >= 2 for walk-forward validation")
         total = len(candles)
         fold_size = total // n_folds
 

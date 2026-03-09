@@ -22,6 +22,7 @@ from cryptolight.risk.cooldown import TradeCooldown
 from cryptolight.risk.position_sizer import PositionSizer
 from cryptolight.risk.risk_guard import RiskGuard
 from cryptolight.storage.repository import TradeRepository
+from cryptolight.storage.strategy_tracker import StrategyTracker
 from cryptolight.strategy import create_strategy
 from cryptolight.utils import setup_logger
 
@@ -269,7 +270,12 @@ def daily_summary_job(
                 ticker = client.get_ticker(symbol)
                 prices[symbol] = ticker.price
             positions_summary = broker.summary_text(prices)
+        # 전략별 성과 추가
+        tracker = StrategyTracker(repo)
+        strategy_summary = tracker.summary_text()
         bot.send_daily_summary(pnl_data, positions_summary)
+        if strategy_summary and "데이터 없음" not in strategy_summary:
+            bot.send_message(f"<b>전략별 성과</b>\n<pre>{strategy_summary}</pre>")
         logger.info("일일 요약 전송 완료")
     except Exception:
         logger.exception("일일 요약 전송 실패")

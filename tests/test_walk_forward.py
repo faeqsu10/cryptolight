@@ -1,4 +1,6 @@
 """WalkForwardValidator 테스트"""
+import pytest
+
 from cryptolight.backtest.walk_forward import WalkForwardValidator
 from cryptolight.exchange.base import Candle
 from cryptolight.strategy.base import BaseStrategy, Signal
@@ -50,3 +52,11 @@ def test_insufficient_data():
     validator = WalkForwardValidator(SimpleBuySellStrategy(), order_amount=50_000)
     result = validator.run(_make_candles(10), n_folds=5)
     assert len(result.folds) == 0
+
+
+def test_invalid_n_folds():
+    validator = WalkForwardValidator(SimpleBuySellStrategy(), order_amount=50_000)
+    with pytest.raises(ValueError, match="n_folds must be >= 2"):
+        validator.run(_make_candles(200), n_folds=1)
+    with pytest.raises(ValueError, match="n_folds must be >= 2"):
+        validator.run(_make_candles(200), n_folds=0)

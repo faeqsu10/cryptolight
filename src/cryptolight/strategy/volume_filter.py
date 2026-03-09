@@ -1,5 +1,6 @@
 """거래량 필터 — 평균 거래량 대비 현재 거래량으로 시그널 품질 판단"""
 
+import dataclasses
 import logging
 import statistics
 
@@ -45,7 +46,7 @@ class VolumeFilter:
 
         volume_ratio = current_volume / avg_volume
 
-        signal.indicators["volume_ratio"] = round(volume_ratio, 2)
+        updated_indicators = {**signal.indicators, "volume_ratio": round(volume_ratio, 2)}
 
         # 거래량 부족 → hold로 전환
         if volume_ratio < self.min_ratio:
@@ -58,16 +59,16 @@ class VolumeFilter:
                 symbol=signal.symbol,
                 reason=f"거래량 부족 (ratio={volume_ratio:.2f})",
                 confidence=0.0,
-                indicators=signal.indicators,
+                indicators=updated_indicators,
             )
 
         # 거래량 폭증 → confidence 부스트
+        new_confidence = signal.confidence
         if volume_ratio >= self.boost_ratio:
-            boosted = min(1.0, signal.confidence * self.boost_factor)
+            new_confidence = min(1.0, signal.confidence * self.boost_factor)
             logger.info(
                 "거래량 부스트: confidence %.2f → %.2f (ratio=%.2f)",
-                signal.confidence, boosted, volume_ratio,
+                signal.confidence, new_confidence, volume_ratio,
             )
-            signal.confidence = boosted
 
-        return signal
+        return dataclasses.replace(signal, confidence=new_confidence, indicators=updated_indicators)

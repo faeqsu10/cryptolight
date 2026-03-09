@@ -4,6 +4,7 @@ from cryptolight.strategy.ensemble import EnsembleStrategy
 from cryptolight.strategy.macd import MACDStrategy
 from cryptolight.strategy.rsi import RSIStrategy
 from cryptolight.strategy.volatility_breakout import VolatilityBreakoutStrategy
+from cryptolight.strategy.volume_filter import VolumeFilter
 
 __all__ = [
     "BaseStrategy",
@@ -13,6 +14,7 @@ __all__ = [
     "MACDStrategy",
     "BollingerStrategy",
     "EnsembleStrategy",
+    "VolumeFilter",
     "create_strategy",
 ]
 
