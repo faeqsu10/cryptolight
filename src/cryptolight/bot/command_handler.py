@@ -19,6 +19,7 @@ class CommandHandler:
         self._kill_switch = False
         self._report_requested = False
         self._status_requested = False
+        self._flush_old_updates()
 
     @property
     def kill_switch(self) -> bool:
@@ -37,6 +38,22 @@ class CommandHandler:
 
     def reset_status(self):
         self._status_requested = False
+
+    def _flush_old_updates(self):
+        """시작 시 밀려있던 옛 업데이트를 건너뛴다."""
+        try:
+            resp = self._client.get(
+                f"{self._base_url}/getUpdates",
+                params={"offset": -1, "timeout": 0},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("result", [])
+                if results:
+                    self._last_update_id = results[-1]["update_id"]
+                    logger.info("이전 업데이트 %d건 건너뜀 (마지막 ID: %d)", len(results), self._last_update_id)
+        except Exception:
+            logger.debug("이전 업데이트 flush 실패 — 무시")
 
     def poll_commands(self) -> list[str]:
         """새 명령어를 폴링한다. 명령어 목록 반환."""

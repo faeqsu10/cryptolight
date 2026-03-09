@@ -1,3 +1,4 @@
+import html
 import logging
 
 import httpx
@@ -40,7 +41,7 @@ class TelegramBot:
         if price is not None:
             lines.append(f"현재가: {price:,.0f} KRW")
 
-        lines.append(f"사유: {signal.reason}")
+        lines.append(f"사유: {html.escape(signal.reason)}")
 
         if signal.confidence > 0:
             lines.append(f"신뢰도: {signal.confidence:.0%}")
@@ -48,7 +49,7 @@ class TelegramBot:
         if signal.indicators:
             indicator_parts = [f"{k}={v}" for k, v in signal.indicators.items() if v is not None]
             if indicator_parts:
-                lines.append(f"지표: {', '.join(indicator_parts)}")
+                lines.append(f"지표: {html.escape(', '.join(indicator_parts))}")
 
         return self.send_message("\n".join(lines))
 

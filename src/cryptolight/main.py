@@ -23,6 +23,8 @@ from cryptolight.risk.position_sizer import PositionSizer
 from cryptolight.risk.risk_guard import RiskGuard
 from cryptolight.storage.repository import TradeRepository
 from cryptolight.storage.strategy_tracker import StrategyTracker
+import html as html_mod
+
 from cryptolight.evaluation import PerformanceEvaluator, StrategyArena, AdaptiveController
 from cryptolight.strategy import create_strategy
 from cryptolight.utils import setup_logger
@@ -334,7 +336,7 @@ def self_improvement_job(
             )
             logger.warning(msg)
             if bot:
-                bot.send_message(f"<b>전략 자동 전환</b>\n<pre>{msg}</pre>")
+                bot.send_message(f"<b>전략 자동 전환</b>\n<pre>{html_mod.escape(msg)}</pre>")
 
         # 4. 롤백 체크
         rollback = controller.check_rollback(settings.strategy_name, evaluator)
@@ -343,15 +345,15 @@ def self_improvement_job(
             if bot:
                 bot.send_message(
                     f"<b>롤백 제안</b>\n"
-                    f"{rollback['from']} → {rollback['to']}\n"
-                    f"사유: {rollback['reason']}"
+                    f"{html_mod.escape(rollback['from'])} → {html_mod.escape(rollback['to'])}\n"
+                    f"사유: {html_mod.escape(rollback['reason'])}"
                 )
 
         # 5. 텔레그램 요약 전송
         if bot:
             bot.send_message(
-                f"<b>자기개선 루프 완료</b>\n<pre>{arena_text}</pre>\n"
-                f"전환 판단: {switch_decision['reason']}"
+                f"<b>자기개선 루프 완료</b>\n<pre>{html_mod.escape(arena_text)}</pre>\n"
+                f"전환 판단: {html_mod.escape(switch_decision['reason'])}"
             )
 
     except Exception:
