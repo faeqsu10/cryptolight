@@ -122,6 +122,11 @@ LOG_LEVEL=INFO
 - "staff engineer가 승인할 수준인가?" 자문
 - 테스트 실행, 로그 확인, 정확성 입증
 
+### Auto Commit & Push
+- 의미 있는 단위의 작업이 완료되면 사용자가 요청하지 않아도 알아서 커밋하고 푸시
+- `.env`, 시크릿 파일은 절대 커밋하지 않음
+- 커밋 메시지는 아래 Git Commit Convention을 따름
+
 ### Autonomous Bug Fixing
 - 버그 리포트 받으면 바로 수정. 질문하지 않기
 - 로그, 에러, 실패 테스트를 찾아서 해결
