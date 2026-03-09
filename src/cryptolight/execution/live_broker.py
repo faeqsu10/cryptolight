@@ -1,6 +1,7 @@
 """실거래 브로커 — 업비트 실주문 실행 (리스크 가드 필수)"""
 
 import logging
+import time
 
 from cryptolight.exchange.base import OrderResult
 from cryptolight.exchange.upbit import UpbitClient
@@ -15,28 +16,65 @@ class LiveBroker(BaseBroker):
     """업비트 실거래 주문 실행기."""
 
     COMMISSION_RATE = 0.0005  # 업비트 0.05%
+    ABSOLUTE_MAX_ORDER_KRW = 500_000  # 하드캡 (설정과 별도의 최종 안전장치)
 
-    def __init__(self, client: UpbitClient, repo: TradeRepository | None = None):
+    def __init__(
+        self,
+        client: UpbitClient,
+        repo: TradeRepository | None = None,
+        absolute_max_order_krw: float = 500_000,
+    ):
         self._client = client
         self._repo = repo
+        self.ABSOLUTE_MAX_ORDER_KRW = absolute_max_order_krw
+
+    def _verify_order(self, order: OrderResult, max_retries: int = 3) -> OrderResult:
+        """주문 체결 상태를 확인한다. done/cancel 될 때까지 재조회."""
+        for i in range(max_retries):
+            try:
+                verified = self._client.get_order(order.order_id)
+                if verified.state in ("done", "cancel"):
+                    return verified
+                time.sleep(1 * (i + 1))
+            except Exception:
+                logger.warning("주문 확인 실패 (%d/%d): %s", i + 1, max_retries, order.order_id)
+                time.sleep(1)
+        logger.warning("주문 상태 미확정: %s (state=%s)", order.order_id, order.state)
+        return order
 
     def buy_market(self, symbol: str, amount_krw: float, current_price: float, reason: str = "") -> OrderResult | None:
+        # 하드캡 검증
+        if amount_krw > self.ABSOLUTE_MAX_ORDER_KRW:
+            logger.error(
+                "하드캡 초과 차단: %s KRW > %s KRW",
+                f"{amount_krw:,.0f}", f"{self.ABSOLUTE_MAX_ORDER_KRW:,.0f}",
+            )
+            return None
+
         try:
             order = self._client.buy_market(symbol, amount_krw)
             logger.info("[LIVE 매수] %s %s KRW — 주문ID: %s", symbol, f"{amount_krw:,.0f}", order.order_id)
 
-            quantity = amount_krw / current_price  # 추정치 (체결 후 조회 필요)
+            # 주문 체결 확인
+            verified = self._verify_order(order)
+            if verified.state == "cancel":
+                logger.warning("매수 주문 취소됨: %s", order.order_id)
+                return None
+
+            # 체결 정보 사용 (가능 시), 아니면 추정치
+            actual_price = verified.price or current_price
+            actual_qty = verified.quantity or (amount_krw / current_price)
             commission = amount_krw * self.COMMISSION_RATE
 
             if self._repo:
                 trade = TradeRecord(
-                    symbol=symbol, side="buy", price=current_price,
-                    quantity=quantity, amount_krw=amount_krw,
+                    symbol=symbol, side="buy", price=actual_price,
+                    quantity=actual_qty, amount_krw=amount_krw,
                     commission=commission, reason=reason,
                 )
                 self._repo.save_trade(trade)
 
-            return order
+            return verified
         except Exception:
             logger.exception("매수 주문 실패: %s", symbol)
             return None
@@ -46,18 +84,25 @@ class LiveBroker(BaseBroker):
             order = self._client.sell_market(symbol, quantity)
             logger.info("[LIVE 매도] %s %.8f — 주문ID: %s", symbol, quantity, order.order_id)
 
-            proceeds = quantity * current_price
+            # 주문 체결 확인
+            verified = self._verify_order(order)
+            if verified.state == "cancel":
+                logger.warning("매도 주문 취소됨: %s", order.order_id)
+                return None
+
+            actual_price = verified.price or current_price
+            proceeds = quantity * actual_price
             commission = proceeds * self.COMMISSION_RATE
 
             if self._repo:
                 trade = TradeRecord(
-                    symbol=symbol, side="sell", price=current_price,
+                    symbol=symbol, side="sell", price=actual_price,
                     quantity=quantity, amount_krw=proceeds,
                     commission=commission, reason=reason,
                 )
                 self._repo.save_trade(trade)
 
-            return order
+            return verified
         except Exception:
             logger.exception("매도 주문 실패: %s", symbol)
             return None

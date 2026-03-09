@@ -51,11 +51,13 @@ def main():
 
     logger.info("캔들 %d개 로드 완료, 백테스트 실행 중...", len(candles))
 
-    # 백테스트 실행
+    # 백테스트 실행 (슬리피지/스프레드 설정 반영)
     engine = BacktestEngine(
         strategy=strategy,
         initial_balance=args.balance,
         order_amount=args.amount,
+        slippage_pct=settings.backtest_slippage_pct,
+        spread_pct=settings.backtest_spread_pct,
     )
     result = engine.run(candles)
     summary = engine.summary_text(result)

@@ -22,12 +22,14 @@ TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 
 # 거래 설정
-TRADE_MODE=paper                # paper | live
+TRADE_MODE=paper                # paper | live (Literal 검증)
 MAX_ORDER_AMOUNT_KRW=50000      # 1회 최대 주문 금액
+ABSOLUTE_MAX_ORDER_KRW=500000   # Live 하드캡 (최종 안전장치)
 DAILY_LOSS_LIMIT_KRW=100000     # 일일 손실 한도
 MAX_POSITIONS=5                 # 동시 보유 종목 수
 STOP_LOSS_PCT=-5.0              # 손절 기준 (%)
 TAKE_PROFIT_PCT=10.0            # 익절 기준 (%)
+TRAILING_STOP_PCT=0.0           # 트레일링 스톱 (0=비활성, 3.0=고점 대비 -3%)
 TARGET_SYMBOLS=KRW-BTC,KRW-ETH  # 대상 종목
 
 # 전략
@@ -38,11 +40,16 @@ ENSEMBLE_STRATEGIES=rsi,macd,bollinger  # 앙상블 사용 시 전략 조합
 SCHEDULE_INTERVAL_MINUTES=5     # 실행 주기 (0이면 1회 실행)
 COMMAND_POLL_SECONDS=30         # 텔레그램 명령어 폴링 주기
 PAPER_INITIAL_BALANCE=1000000   # Paper 초기 자금 (KRW)
-DB_PATH=data/trades.db          # SQLite DB 경로
+DB_PATH=data/trades.db          # SQLite DB 경로 (WAL 모드)
 
 # 알림
 SURGE_ALERT_THRESHOLD=0.05      # 급등/급락 알림 기준 (5%)
 LOG_LEVEL=INFO
+LOG_FILE=                       # 파일 로깅 경로 (빈값=비활성, 예: logs/cryptolight.log)
+
+# 백테스트
+BACKTEST_SLIPPAGE_PCT=0.1       # 슬리피지 (0.1%)
+BACKTEST_SPREAD_PCT=0.05        # 스프레드 (0.05%)
 ```
 
 ## 실행
@@ -121,14 +128,28 @@ python -m cryptolight.backtest --symbol KRW-BTC --strategy ensemble --balance 50
 - 여러 전략의 시그널을 다수결 투표로 결합
 - 2/3 이상 동의 시 매매, 동률이면 관망
 
+## Docker
+
+```bash
+# 빌드 & 실행
+docker compose up -d
+
+# 로그 확인
+docker compose logs -f
+```
+
 ## 리스크 관리
 
 - 1회 최대 주문 금액 제한
+- Live 모드 하드캡 (ABSOLUTE_MAX_ORDER_KRW)
 - 동시 보유 종목 수 제한
 - 일일 손실 한도 (초과 시 매수 차단)
 - 자동 손절/익절 트리거
+- 트레일링 스톱 (고점 대비 N% 하락 시 매도)
+- Live 주문 체결 검증 (get_order 재조회)
 - 중복 시그널 방지
 - API 장애 시 지수 백오프 재시도 (최대 3회)
+- SQLite WAL 모드 + 스레드 안전
 
 ## 프로젝트 구조
 

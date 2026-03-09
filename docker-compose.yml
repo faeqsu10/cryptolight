@@ -1,0 +1,11 @@
+services:
+  cryptolight:
+    build: .
+    container_name: cryptolight-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Seoul

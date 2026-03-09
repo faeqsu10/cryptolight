@@ -17,7 +17,11 @@ class BacktestResult:
     sell_trades: int
     initial_balance: float
     final_equity: float
-    daily_returns: list[float] = field(default_factory=list)  # 일별 수익률
+    daily_returns: list[float] = field(default_factory=list)
+    # Buy & Hold 벤치마크
+    buy_hold_return_pct: float = 0.0
+    buy_hold_final_equity: float = 0.0
+    alpha_pct: float = 0.0  # 전략 수익률 - Buy&Hold 수익률
 
 
 class BacktestEngine:
@@ -29,11 +33,33 @@ class BacktestEngine:
         initial_balance: float = 1_000_000,
         order_amount: float = 50_000,
         commission_rate: float = 0.0005,
+        slippage_pct: float = 0.0,
+        spread_pct: float = 0.0,
     ):
         self.strategy = strategy
         self.initial_balance = initial_balance
         self.order_amount = order_amount
         self.commission_rate = commission_rate
+        self.slippage_pct = slippage_pct / 100  # % → 비율
+        self.spread_pct = spread_pct / 100
+
+    def _apply_slippage(self, price: float, side: str) -> float:
+        """매수 시 불리한 방향으로 슬리피지+스프레드 적용."""
+        impact = self.slippage_pct + self.spread_pct / 2
+        if side == "buy":
+            return price * (1 + impact)
+        return price * (1 - impact)
+
+    def _calc_buy_hold(self, candles: list[Candle], start_idx: int) -> tuple[float, float]:
+        """Buy & Hold 벤치마크 계산."""
+        if start_idx >= len(candles):
+            return 0.0, self.initial_balance
+        entry_price = candles[start_idx].close
+        exit_price = candles[-1].close
+        qty = (self.initial_balance - self.initial_balance * self.commission_rate) / entry_price
+        final_val = qty * exit_price - exit_price * qty * self.commission_rate
+        bh_return = ((final_val - self.initial_balance) / self.initial_balance) * 100
+        return round(bh_return, 2), round(final_val, 2)
 
     def run(self, candles: list[Candle]) -> BacktestResult:
         """캔들 데이터를 순회하며 백테스트를 실행한다."""
@@ -55,14 +81,13 @@ class BacktestEngine:
             price = candles[i].close
 
             if signal.action == "buy" and balance >= self.order_amount:
-                # 매수: order_amount만큼
+                exec_price = self._apply_slippage(price, "buy")
                 amount = min(self.order_amount, balance)
                 commission = amount * self.commission_rate
                 cost = amount + commission
 
                 if cost <= balance:
-                    qty = amount / price
-                    # 평단가 갱신
+                    qty = amount / exec_price
                     total_value = position_qty * position_avg_price + amount
                     position_qty += qty
                     position_avg_price = total_value / position_qty if position_qty > 0 else 0
@@ -70,13 +95,12 @@ class BacktestEngine:
                     buy_trades += 1
 
             elif signal.action == "sell" and position_qty > 0:
-                # 매도: 전량
-                proceeds = position_qty * price
+                exec_price = self._apply_slippage(price, "sell")
+                proceeds = position_qty * exec_price
                 commission = proceeds * self.commission_rate
                 net_proceeds = proceeds - commission
 
-                # 승패 판정
-                if price > position_avg_price:
+                if exec_price > position_avg_price:
                     winning_trades += 1
                 else:
                     losing_trades += 1
@@ -86,7 +110,6 @@ class BacktestEngine:
                 position_avg_price = 0.0
                 sell_trades += 1
 
-            # 현재 자산 기록 (현금 + 코인 평가액)
             equity = balance + position_qty * price
             equity_curve.append(equity)
 
@@ -120,13 +143,16 @@ class BacktestEngine:
             drawdown = (eq - peak) / peak
             if drawdown < max_drawdown_pct:
                 max_drawdown_pct = drawdown
-        max_drawdown_pct *= 100  # %로 변환
+        max_drawdown_pct *= 100
 
         # 승률
         total_completed = winning_trades + losing_trades
         win_rate = (winning_trades / total_completed * 100) if total_completed > 0 else 0.0
-
         total_trades = buy_trades + sell_trades
+
+        # Buy & Hold 벤치마크
+        bh_return, bh_equity = self._calc_buy_hold(candles, required)
+        alpha = round(total_return_pct - bh_return, 2)
 
         return BacktestResult(
             total_return_pct=round(total_return_pct, 2),
@@ -139,6 +165,9 @@ class BacktestEngine:
             initial_balance=self.initial_balance,
             final_equity=round(final_equity, 2),
             daily_returns=daily_returns,
+            buy_hold_return_pct=bh_return,
+            buy_hold_final_equity=bh_equity,
+            alpha_pct=alpha,
         )
 
     def summary_text(self, result: BacktestResult) -> str:
@@ -148,6 +177,8 @@ class BacktestEngine:
             f"초기 자산: {result.initial_balance:,.0f} KRW",
             f"최종 자산: {result.final_equity:,.0f} KRW",
             f"총 수익률: {result.total_return_pct:+.2f}%",
+            f"Buy&Hold: {result.buy_hold_return_pct:+.2f}% ({result.buy_hold_final_equity:,.0f} KRW)",
+            f"Alpha: {result.alpha_pct:+.2f}%",
             f"샤프 비율: {result.sharpe_ratio:.4f}",
             f"최대 낙폭: {result.max_drawdown_pct:.2f}%",
             f"승률: {result.win_rate:.1f}%",

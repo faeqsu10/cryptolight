@@ -71,6 +71,13 @@ def run_strategy(
                         if bot:
                             bot.send_message(f"\U0001f7e2 <b>익절 매도</b>\n{symbol} @ {ticker.price:,.0f} KRW")
                     continue
+                elif sl_tp == "trailing_stop":
+                    order = broker.sell_market(symbol, pos.quantity, ticker.price, reason="트레일링 스톱")
+                    if order:
+                        logger.warning("트레일링 스톱 매도: %s %.8f @ %s", symbol, pos.quantity, f"{ticker.price:,.0f}")
+                        if bot:
+                            bot.send_message(f"\U0001f7e1 <b>트레일링 스톱</b>\n{symbol} @ {ticker.price:,.0f} KRW")
+                    continue
 
         # 전략 분석
         signal_result = strategy.analyze(candles)
@@ -243,7 +250,7 @@ def main():
     args = parser.parse_args()
 
     settings = get_settings()
-    logger = setup_logger("cryptolight.main", settings.log_level)
+    logger = setup_logger("cryptolight.main", settings.log_level, settings.log_file)
 
     once_mode = args.once or settings.schedule_interval_minutes == 0
 
@@ -281,6 +288,7 @@ def main():
         max_positions=settings.max_positions,
         stop_loss_pct=settings.stop_loss_pct,
         take_profit_pct=settings.take_profit_pct,
+        trailing_stop_pct=settings.trailing_stop_pct,
         repo=repo,
     )
 
@@ -290,8 +298,11 @@ def main():
         broker = PaperBroker(initial_balance=settings.paper_initial_balance, repo=repo)
         logger.info("Paper trading 초기화: 초기 자금 %s KRW", f"{broker.initial_balance:,.0f}")
     elif settings.trade_mode == "live":
-        broker = LiveBroker(client=client, repo=repo)
-        logger.info("Live trading 초기화")
+        broker = LiveBroker(
+            client=client, repo=repo,
+            absolute_max_order_krw=settings.absolute_max_order_krw,
+        )
+        logger.info("Live trading 초기화 (하드캡: %s KRW)", f"{settings.absolute_max_order_krw:,.0f}")
         if bot:
             bot.send_message("\u26a0\ufe0f <b>LIVE 모드</b>로 실행 중입니다.")
 
@@ -320,7 +331,7 @@ def main():
 
     # ── 스케줄러 모드 ──
     logger.info("스케줄러 모드: %d분 간격", settings.schedule_interval_minutes)
-    scheduler = BlockingScheduler()
+    scheduler = BlockingScheduler(timezone="Asia/Seoul")
 
     scheduler.add_job(
         strategy_job,

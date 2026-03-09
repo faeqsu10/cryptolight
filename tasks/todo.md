@@ -54,3 +54,18 @@
 - [x] 일일 요약 스케줄 (매일 09:00 KST)
 - [x] /report 텔레그램 명령어
 - [x] ensemble_strategies 설정
+
+## 8단계: Phase 4 프로덕션 강화 ✅
+- [x] trade_mode Literal["paper","live"] 검증
+- [x] LiveBroker 하드캡 (ABSOLUTE_MAX_ORDER_KRW)
+- [x] LiveBroker 주문 체결 검증 (get_order 재조회)
+- [x] 트레일링 스톱 (고점 대비 N% 하락 매도)
+- [x] 백테스트 슬리피지/스프레드 모델링
+- [x] 백테스트 Buy&Hold 벤치마크 + Alpha
+- [x] SQLite 스레드 안전 (check_same_thread=False, WAL)
+- [x] 스케줄러 timezone=Asia/Seoul
+- [x] RotatingFileHandler 파일 로깅
+- [x] Docker 컨테이너화 (Dockerfile + docker-compose + .dockerignore)
+- [x] .gitignore에 data/ 추가
+- [x] pytest 단위 테스트 35개 (settings, risk, backtest, strategies, broker)
+- [x] ruff 린트 클린
