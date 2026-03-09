@@ -12,6 +12,8 @@ from cryptolight.bot.telegram_bot import TelegramBot
 from cryptolight.config import get_settings
 from cryptolight.exchange.candle_cache import CandleCache
 from cryptolight.health import HealthMonitor
+from cryptolight.market.regime import MarketRegime
+from cryptolight.strategy.volume_filter import VolumeFilter
 from cryptolight.exchange.upbit import UpbitClient
 from cryptolight.execution.base import BaseBroker
 from cryptolight.execution.live_broker import LiveBroker
@@ -31,6 +33,8 @@ _candle_cache: CandleCache | None = None
 _cooldown: TradeCooldown | None = None
 _position_sizer: PositionSizer | None = None
 _health: HealthMonitor | None = None
+_regime_detector: MarketRegime | None = None
+_volume_filter: VolumeFilter | None = None
 
 
 def run_strategy(
@@ -97,9 +101,19 @@ def run_strategy(
                             bot.send_message(f"\U0001f7e1 <b>트레일링 스톱</b>\n{symbol} @ {ticker.price:,.0f} KRW")
                     continue
 
+        # 시장 국면 감지
+        regime_info = None
+        if _regime_detector and len(candles) >= _regime_detector.required_candle_count():
+            regime_info = _regime_detector.detect(candles)
+            logger.info("시장 국면: %s (ADX=%.1f, 매매가중치=%.1f)", regime_info["regime"], regime_info["adx"], regime_info["trade_weight"])
+
         # 전략 분석
         signal_result = strategy.analyze(candles)
         signal_result.symbol = symbol
+
+        # 거래량 필터 적용
+        if _volume_filter:
+            signal_result = _volume_filter.apply(signal_result, candles)
 
         logger.info(
             "[%s] %s — %s (신뢰도: %.0f%%, RSI: %s)",
@@ -163,10 +177,13 @@ def run_strategy(
                         bot.send_message(f"\u26a0\ufe0f <b>매수 차단</b>\n{symbol}: {check.reason}")
                     continue
 
-            # 포지션 사이징
+            # 포지션 사이징 (시장 국면 가중치 반영)
             if _position_sizer:
                 equity = broker.get_equity({symbol: ticker.price}) if isinstance(broker, PaperBroker) else settings.max_order_amount_krw
-                order_amount = _position_sizer.calculate(equity, signal_result.confidence)
+                confidence = signal_result.confidence
+                if regime_info:
+                    confidence *= regime_info["trade_weight"]
+                order_amount = _position_sizer.calculate(equity, confidence)
             else:
                 order_amount = settings.max_order_amount_krw
 
@@ -337,9 +354,11 @@ def main():
 
     client = UpbitClient(settings.upbit_access_key, settings.upbit_secret_key)
 
-    # 캔들 캐시, 쿨다운, 포지션 사이징, 헬스체크 초기화
-    global _candle_cache, _cooldown, _position_sizer, _health
+    # 캔들 캐시, 쿨다운, 포지션 사이징, 헬스체크, 국면감지, 거래량필터 초기화
+    global _candle_cache, _cooldown, _position_sizer, _health, _regime_detector, _volume_filter
     _health = HealthMonitor()
+    _regime_detector = MarketRegime()
+    _volume_filter = VolumeFilter()
     _candle_cache = CandleCache(ttl_seconds=settings.candle_cache_ttl)
     _cooldown = TradeCooldown(
         cooldown_seconds=settings.trade_cooldown_seconds,

@@ -4,6 +4,7 @@ import logging
 
 from cryptolight.backtest.data_loader import load_candles
 from cryptolight.backtest.engine import BacktestEngine
+from cryptolight.backtest.walk_forward import WalkForwardValidator
 from cryptolight.bot.telegram_bot import TelegramBot
 from cryptolight.config import get_settings
 from cryptolight.exchange.upbit import UpbitClient
@@ -19,6 +20,8 @@ def main():
     parser.add_argument("--balance", type=float, default=1_000_000)
     parser.add_argument("--amount", type=float, default=50_000)
     parser.add_argument("--telegram", action="store_true", help="결과를 텔레그램으로 전송")
+    parser.add_argument("--walk-forward", action="store_true", help="Walk-Forward Validation")
+    parser.add_argument("--folds", type=int, default=5, help="Walk-Forward fold 수")
     args = parser.parse_args()
 
     setup_logger(level="INFO")
@@ -50,6 +53,28 @@ def main():
         return
 
     logger.info("캔들 %d개 로드 완료, 백테스트 실행 중...", len(candles))
+
+    # Walk-Forward Validation 모드
+    if args.walk_forward:
+        validator = WalkForwardValidator(
+            strategy=strategy,
+            initial_balance=args.balance,
+            order_amount=args.amount,
+            slippage_pct=settings.backtest_slippage_pct,
+            spread_pct=settings.backtest_spread_pct,
+        )
+        wf_result = validator.run(candles, n_folds=args.folds)
+        summary = wf_result.summary_text()
+        print()
+        print(summary)
+
+        if args.telegram and settings.telegram_bot_token and settings.telegram_chat_id:
+            bot = TelegramBot(token=settings.telegram_bot_token, chat_id=settings.telegram_chat_id)
+            try:
+                bot.send_message(f"<b>Walk-Forward</b>\n{args.symbol}/{args.strategy}\n\n{summary}")
+            finally:
+                bot.close()
+        return
 
     # 백테스트 실행 (슬리피지/스프레드 설정 반영)
     engine = BacktestEngine(
