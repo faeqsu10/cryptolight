@@ -2,6 +2,7 @@
 
 import argparse
 import signal
+import threading
 from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -21,8 +22,9 @@ from cryptolight.storage.repository import TradeRepository
 from cryptolight.strategy import create_strategy
 from cryptolight.utils import setup_logger
 
-# 중복 시그널 방지: symbol -> action
+# 중복 시그널 방지: symbol -> action (스레드 안전)
 _last_signals: dict[str, str] = {}
+_signal_lock = threading.Lock()
 # 모듈 레벨 캐시/쿨다운 (main()에서 초기화)
 _candle_cache: CandleCache | None = None
 _cooldown: TradeCooldown | None = None
@@ -103,12 +105,13 @@ def run_strategy(
             signal_result.confidence * 100, signal_result.indicators.get("rsi", "N/A"),
         )
 
-        # 중복 시그널 방지
-        prev = _last_signals.get(symbol)
-        if prev == signal_result.action:
-            logger.info("중복 시그널 스킵: %s → %s", symbol, signal_result.action)
-            continue
-        _last_signals[symbol] = signal_result.action
+        # 중복 시그널 방지 (스레드 안전)
+        with _signal_lock:
+            prev = _last_signals.get(symbol)
+            if prev == signal_result.action:
+                logger.info("중복 시그널 스킵: %s → %s", symbol, signal_result.action)
+                continue
+            _last_signals[symbol] = signal_result.action
 
         # 매수 실행
         if broker and signal_result.action == "buy":

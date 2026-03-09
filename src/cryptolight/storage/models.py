@@ -11,6 +11,7 @@ class TradeRecord:
     amount_krw: float
     commission: float
     reason: str
+    strategy: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     id: int | None = None
 

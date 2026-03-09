@@ -76,3 +76,9 @@
 - [x] 이상 거래 감지 (종목별 쿨다운, 시간당 주문 횟수 제한)
 - [x] main.py에 포지션 사이징/캐시/쿨다운 통합
 - [x] pytest 52개 (position_sizer, cooldown, candle_cache 추가)
+
+## 10단계: Phase 4c 보안/안정성 ✅
+- [x] 토큰/API키 로그 마스킹 (RedactingFormatter)
+- [x] 전략별 거래 추적 (trades 테이블 strategy 컬럼 + 마이그레이션)
+- [x] 스레드 안전한 시그널 중복 방지 (threading.Lock)
+- [x] pytest 56개 (logger 마스킹 테스트 추가)

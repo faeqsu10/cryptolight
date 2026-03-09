@@ -30,9 +30,16 @@ class TradeRepository:
                 amount_krw REAL NOT NULL,
                 commission REAL NOT NULL,
                 reason TEXT,
+                strategy TEXT DEFAULT '',
                 timestamp TEXT NOT NULL
             )
         """)
+        # 기존 테이블에 strategy 컬럼이 없으면 추가
+        try:
+            self._conn.execute("SELECT strategy FROM trades LIMIT 1")
+        except Exception:
+            self._conn.execute("ALTER TABLE trades ADD COLUMN strategy TEXT DEFAULT ''")
+            self._conn.commit()
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS positions (
                 symbol TEXT PRIMARY KEY,
@@ -51,10 +58,10 @@ class TradeRepository:
 
     def save_trade(self, trade: TradeRecord) -> int:
         cursor = self._conn.execute(
-            """INSERT INTO trades (symbol, side, price, quantity, amount_krw, commission, reason, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO trades (symbol, side, price, quantity, amount_krw, commission, reason, strategy, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (trade.symbol, trade.side, trade.price, trade.quantity,
-             trade.amount_krw, trade.commission, trade.reason, trade.timestamp),
+             trade.amount_krw, trade.commission, trade.reason, trade.strategy, trade.timestamp),
         )
         self._conn.commit()
         logger.info("거래 기록 저장: %s %s %.8f @ %s", trade.side, trade.symbol, trade.quantity, f"{trade.price:,.0f}")
