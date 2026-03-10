@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cryptolight dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0e1a;--glass:rgba(255,255,255,0.05);--glass-border:rgba(255,255,255,0.08);
+  --text:#e0e0e0;--text-dim:#888;--buy:#00d4aa;--sell:#ff4757;--hold:#ffa502;
+  --accent:#6c5ce7;--blur:20px;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden}
+.bg-orbs{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:.15;animation:float 20s infinite ease-in-out}
+.orb:nth-child(1){width:400px;height:400px;background:#6c5ce7;top:-100px;left:-100px;animation-delay:0s}
+.orb:nth-child(2){width:350px;height:350px;background:#00d4aa;bottom:-80px;right:-80px;animation-delay:-7s}
+.orb:nth-child(3){width:300px;height:300px;background:#ff4757;top:40%;left:60%;animation-delay:-14s}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(30px,-40px) scale(1.1)}66%{transform:translate(-20px,30px) scale(.9)}}
+.container{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:24px 16px}
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px}
+h1{font-size:1.5rem;font-weight:700;letter-spacing:-.5px}
+h1 span{color:var(--accent)}
+.badges{display:flex;gap:8px}
+.badge{padding:4px 12px;border-radius:20px;font-size:.75rem;font-weight:600;background:var(--glass);border:1px solid var(--glass-border);backdrop-filter:blur(var(--blur))}
+.badge.live{color:var(--sell);border-color:rgba(255,71,87,.3)}
+.badge.paper{color:var(--buy);border-color:rgba(0,212,170,.3)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;margin-bottom:20px}
+.card{background:var(--glass);border:1px solid var(--glass-border);border-radius:16px;padding:20px;backdrop-filter:blur(var(--blur));transition:border-color .2s}
+.card:hover{border-color:rgba(255,255,255,.15)}
+.card-title{font-size:.8rem;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);margin-bottom:12px}
+.price{font-size:1.8rem;font-weight:700;font-variant-numeric:tabular-nums}
+.change{font-size:.95rem;font-weight:600;margin-left:8px}
+.change.up{color:var(--buy)}.change.down{color:var(--sell)}
+.meta{display:flex;gap:16px;margin-top:12px;font-size:.85rem;color:var(--text-dim)}
+.meta span{display:flex;align-items:center;gap:4px}
+.signal-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.75rem;font-weight:700;text-transform:uppercase}
+.signal-badge.buy{background:rgba(0,212,170,.15);color:var(--buy)}
+.signal-badge.sell{background:rgba(255,71,87,.15);color:var(--sell)}
+.signal-badge.hold{background:rgba(255,165,2,.12);color:var(--hold)}
+.rsi-bar{height:6px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:8px;position:relative;overflow:hidden}
+.rsi-fill{height:100%;border-radius:3px;transition:width .6s ease}
+.portfolio-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.portfolio-row .label{color:var(--text-dim);font-size:.85rem}
+.portfolio-row .value{font-size:1.1rem;font-weight:600;font-variant-numeric:tabular-nums}
+.pnl-big{font-size:2rem;font-weight:700;text-align:center;margin:16px 0 8px;font-variant-numeric:tabular-nums}
+.pnl-pct{text-align:center;font-size:1rem;font-weight:600;margin-bottom:4px}
+.regime-display{text-align:center;margin:8px 0}
+.regime-name{font-size:1.3rem;font-weight:700;text-transform:capitalize}
+.regime-desc{font-size:.8rem;color:var(--text-dim);margin-top:4px}
+.adx-val{font-size:.85rem;color:var(--text-dim);margin-top:8px}
+.regime-ring{width:80px;height:80px;border-radius:50%;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;font-size:1.6rem;position:relative}
+.regime-ring::before{content:'';position:absolute;inset:-3px;border-radius:50%;border:2px solid;animation:pulse-ring 2s infinite}
+.regime-ring.trending{background:rgba(0,212,170,.1)}.regime-ring.trending::before{border-color:var(--buy)}
+.regime-ring.sideways{background:rgba(255,165,2,.1)}.regime-ring.sideways::before{border-color:var(--hold)}
+.regime-ring.volatile{background:rgba(255,71,87,.1)}.regime-ring.volatile::before{border-color:var(--sell)}
+@keyframes pulse-ring{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:.8;transform:scale(1.05)}}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{text-align:left;padding:8px 6px;color:var(--text-dim);font-weight:500;border-bottom:1px solid var(--glass-border);font-size:.75rem;text-transform:uppercase;letter-spacing:.5px}
+td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-numeric:tabular-nums}
+.side-buy{color:var(--buy);font-weight:600}.side-sell{color:var(--sell);font-weight:600}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.status-dot.ok{background:var(--buy)}.status-dot.error{background:var(--sell)}
+.empty-msg{text-align:center;color:var(--text-dim);padding:32px;font-size:.9rem}
+.pos-card{background:rgba(255,255,255,.03);border-radius:10px;padding:12px;margin-top:8px}
+.updated{font-size:.7rem;color:var(--text-dim);text-align:right;margin-top:16px}
+@media(max-width:600px){.grid{grid-template-columns:1fr}.price{font-size:1.4rem}h1{font-size:1.2rem}}
+</style>
+</head>
+<body>
+<div class="bg-orbs"><div class="orb"></div><div class="orb"></div><div class="orb"></div></div>
+<div class="container">
+  <header>
+    <h1>crypto<span>light</span></h1>
+    <div class="badges">
+      <div class="badge" id="badge-strategy">{{ strategy_name }}</div>
+      <div class="badge {{ trade_mode }}" id="badge-mode">{{ trade_mode }}</div>
+    </div>
+  </header>
+
+  <div class="grid" id="coin-cards"></div>
+
+  <div class="grid">
+    <div class="card" id="portfolio-card">
+      <div class="card-title">Portfolio</div>
+      <div class="pnl-big" id="pnl-value">--</div>
+      <div class="pnl-pct" id="pnl-pct">--</div>
+      <hr style="border:none;border-top:1px solid var(--glass-border);margin:12px 0">
+      <div class="portfolio-row"><span class="label">Total Equity</span><span class="value" id="equity">--</span></div>
+      <div class="portfolio-row"><span class="label">Cash (KRW)</span><span class="value" id="cash">--</span></div>
+      <div class="portfolio-row"><span class="label">Initial</span><span class="value" id="initial">--</span></div>
+      <div id="positions-list"></div>
+    </div>
+
+    <div class="card" id="regime-card">
+      <div class="card-title">Market Regime</div>
+      <div class="regime-display">
+        <div class="regime-ring" id="regime-ring"><span id="regime-icon">--</span></div>
+        <div class="regime-name" id="regime-name">--</div>
+        <div class="regime-desc" id="regime-desc">--</div>
+        <div class="adx-val">ADX: <span id="adx-val">--</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-title">Recent Trades</div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Amount</th><th>Reason</th></tr></thead>
+        <tbody id="trades-body"><tr><td colspan="6" class="empty-msg">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Bot Status</div>
+    <div id="status-info" class="meta" style="flex-wrap:wrap;gap:12px"></div>
+  </div>
+
+  <div class="updated" id="updated-at"></div>
+</div>
+
+<script>
+const esc=s=>{if(s==null)return'';const d=document.createElement('div');d.textContent=String(s);return d.innerHTML};
+const fmt=n=>{if(n==null)return'--';return n.toLocaleString('ko-KR')};
+const fmtPct=n=>n==null?'--':(n>=0?'+':'')+n.toFixed(2)+'%';
+const fmtPrice=n=>{if(!n)return'--';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return n.toLocaleString('ko-KR');return n.toFixed(2)};
+const rsiColor=v=>{if(v<=30)return'var(--buy)';if(v>=70)return'var(--sell)';return'var(--hold)'};
+const regimeEmoji={trending:'&#x1F4C8;',sideways:'&#x2194;&#xFE0F;',volatile:'&#x26A1;'};
+const regimeDesc={trending:'Strong directional movement',sideways:'Low volatility, range-bound',volatile:'High volatility, wide swings'};
+
+async function fetchAll(){
+  try{
+    const[market,portfolio,trades,status]=await Promise.all([
+      fetch('/api/market').then(r=>r.json()),
+      fetch('/api/portfolio').then(r=>r.json()),
+      fetch('/api/trades').then(r=>r.json()),
+      fetch('/api/status').then(r=>r.json()),
+    ]);
+    renderMarket(market);
+    renderPortfolio(portfolio);
+    renderTrades(trades);
+    renderStatus(status);
+    renderRegime(market);
+    document.getElementById('updated-at').textContent='Last updated: '+new Date().toLocaleTimeString('ko-KR');
+  }catch(e){console.error('Fetch error:',e)}
+}
+
+function renderMarket(data){
+  const c=document.getElementById('coin-cards');
+  if(!Object.keys(data).length){c.innerHTML='<div class="card"><div class="empty-msg">Waiting for market data...</div></div>';return}
+  c.innerHTML=Object.entries(data).map(([sym,d])=>{
+    const chgClass=d.change>=0?'up':'down';
+    const chgSign=d.change>=0?'+':'';
+    const rsi=d.rsi!=null?d.rsi.toFixed(1):'N/A';
+    const rsiW=d.rsi!=null?Math.min(100,Math.max(0,d.rsi))+'%':'0%';
+    const rc=d.rsi!=null?rsiColor(d.rsi):'var(--text-dim)';
+    return`<div class="card">
+      <div class="card-title">${esc(sym)}</div>
+      <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:4px">
+        <span class="price">${fmtPrice(d.price)}</span>
+        <span class="change ${chgClass}">${chgSign}${d.change.toFixed(2)}%</span>
+      </div>
+      <div class="meta">
+        <span>RSI: ${rsi}</span>
+        <span>Regime: ${esc(d.regime)}</span>
+        <span class="signal-badge ${esc(d.action)}">${esc(d.action)}</span>
+      </div>
+      <div class="rsi-bar"><div class="rsi-fill" style="width:${rsiW};background:${rc}"></div></div>
+    </div>`}).join('');
+}
+
+function renderPortfolio(d){
+  const pnlColor=d.pnl>=0?'var(--buy)':'var(--sell)';
+  document.getElementById('pnl-value').innerHTML=`<span style="color:${pnlColor}">${d.pnl>=0?'+':''}${fmt(d.pnl)} KRW</span>`;
+  document.getElementById('pnl-pct').innerHTML=`<span style="color:${pnlColor}">${fmtPct(d.pnl_pct)}</span>`;
+  document.getElementById('equity').textContent=fmt(d.equity)+' KRW';
+  document.getElementById('cash').textContent=fmt(d.cash)+' KRW';
+  document.getElementById('initial').textContent=fmt(d.initial_balance)+' KRW';
+  const pl=document.getElementById('positions-list');
+  if(!d.positions||!d.positions.length){pl.innerHTML='';return}
+  pl.innerHTML=d.positions.map(p=>{
+    const pc=p.pnl>=0?'var(--buy)':'var(--sell)';
+    return`<div class="pos-card">
+      <div style="display:flex;justify-content:space-between"><strong>${esc(p.symbol)}</strong><span style="color:${pc}">${p.pnl>=0?'+':''}${fmt(p.pnl)} (${fmtPct(p.pnl_pct)})</span></div>
+      <div class="meta"><span>Qty: ${p.quantity.toFixed(8)}</span><span>Avg: ${fmtPrice(p.avg_price)}</span><span>Now: ${fmtPrice(p.current_price)}</span></div>
+    </div>`}).join('');
+}
+
+function renderTrades(trades){
+  const tb=document.getElementById('trades-body');
+  if(!trades.length){tb.innerHTML='<tr><td colspan="6" class="empty-msg">No trades yet</td></tr>';return}
+  tb.innerHTML=trades.map(t=>{
+    const sc=t.side==='buy'?'side-buy':'side-sell';
+    const ts=t.timestamp?t.timestamp.substring(5,16).replace('T',' '):'';
+    return`<tr><td>${ts}</td><td>${esc(t.symbol)}</td><td class="${sc}">${esc(t.side.toUpperCase())}</td><td>${fmtPrice(t.price)}</td><td>${fmt(t.amount_krw)}</td><td>${esc(t.reason||'')}</td></tr>`}).join('');
+}
+
+function renderStatus(d){
+  const el=document.getElementById('status-info');
+  const h=d.health||{};
+  const ok=h.healthy!==false;
+  el.innerHTML=`
+    <span><span class="status-dot ${ok?'ok':'error'}"></span>${ok?'Healthy':'Issues detected'}</span>
+    <span>Strategy: ${d.strategy}</span>
+    <span>Mode: ${d.trade_mode}</span>
+    <span>Interval: ${d.interval_minutes}min</span>
+    <span>Symbols: ${(d.symbols||[]).join(', ')}</span>
+    <span>Uptime: ${h.uptime_minutes||0}min</span>
+    <span>Cycles: ${h.total_cycles||0}</span>
+    <span>Errors: ${h.consecutive_errors||0}</span>`;
+}
+
+function renderRegime(market){
+  const syms=Object.values(market);
+  if(!syms.length)return;
+  const first=syms[0];
+  const r=first.regime||'N/A';
+  const ring=document.getElementById('regime-ring');
+  ring.className='regime-ring '+(r!=='N/A'?r:'');
+  document.getElementById('regime-icon').innerHTML=regimeEmoji[r]||'&#x2753;';
+  document.getElementById('regime-name').textContent=r;
+  document.getElementById('regime-desc').textContent=regimeDesc[r]||'No data';
+  document.getElementById('adx-val').textContent=first.adx!=null?first.adx.toFixed(1):'--';
+}
+
+fetchAll();
+setInterval(fetchAll,10000);
+</script>
+</body>
+</html>

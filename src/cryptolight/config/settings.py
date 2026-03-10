@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"  # Gemini 모델명
     ask_daily_limit: int = 10  # /ask 일일 사용 제한
 
+    # 웹 대시보드
+    enable_web: bool = False
+    web_host: str = "127.0.0.1"
+    web_port: int = 8080
+
     # 로깅
     log_level: str = "INFO"
     log_file: str = ""  # 비어있으면 파일 로깅 비활성화, 경로 지정 시 RotatingFileHandler

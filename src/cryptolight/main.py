@@ -707,6 +707,30 @@ def main():
         )
         logger.info("자기개선 루프 활성화: 매주 일요일 03:00 실행")
 
+    # ── 웹 대시보드 ──
+    if settings.enable_web:
+        try:
+            import uvicorn
+            from cryptolight.web.app import app as web_app, configure as web_configure
+
+            web_configure(
+                market_snapshots=_market_snapshots,
+                broker=broker,
+                repo=repo,
+                health=_health,
+                settings=settings,
+            )
+            web_thread = threading.Thread(
+                target=uvicorn.run,
+                kwargs={"app": web_app, "host": settings.web_host, "port": settings.web_port, "log_level": "warning"},
+                daemon=True,
+                name="web-dashboard",
+            )
+            web_thread.start()
+            logger.info("웹 대시보드 시작: http://%s:%d", settings.web_host, settings.web_port)
+        except ImportError:
+            logger.warning("웹 대시보드 비활성: fastapi/uvicorn 미설치 (pip install cryptolight[web])")
+
     # Graceful shutdown
     def _shutdown(signum, _frame):
         sig_name = signal.Signals(signum).name

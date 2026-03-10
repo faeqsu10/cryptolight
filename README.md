@@ -31,6 +31,8 @@ cp .env.example .env
 | `TARGET_SYMBOLS` | 대상 종목 | `KRW-BTC,KRW-ETH` |
 | `GOOGLE_API_KEY` | Gemini AI API 키 (/ask용) | (선택) |
 | `GEMINI_MODEL` | Gemini 모델명 | `gemini-2.5-flash` |
+| `ENABLE_WEB` | 웹 대시보드 활성화 | `false` |
+| `WEB_PORT` | 웹 대시보드 포트 | `8080` |
 
 전체 설정 항목은 `src/cryptolight/config/settings.py`를 참고.
 
@@ -96,6 +98,29 @@ STRATEGY_NAME=ensemble python -m cryptolight.main   # 다수결 앙상블
 | `/unmute` | 자동 알림 켜기 |
 | `/stop` | 긴급 거래 중지 (킬스위치) |
 | `/help` | 명령어 목록 |
+
+## 웹 대시보드
+
+글래스모피즘 디자인의 실시간 모니터링 대시보드.
+
+```bash
+# 의존성 설치
+pip install -e ".[web]"
+
+# .env에 설정 추가
+ENABLE_WEB=true
+WEB_PORT=8080
+
+# 실행 후 브라우저에서 http://localhost:8080 접속
+python -m cryptolight.main
+```
+
+대시보드 기능:
+- 종목별 실시간 가격, RSI 게이지, 시그널 상태
+- 포트폴리오 현황 (총자산, 손익률, 보유 포지션)
+- 시장 국면 표시 (추세/횡보/변동)
+- 최근 거래 내역
+- 봇 상태 모니터링
 
 ## 백테스트
 
@@ -170,13 +195,16 @@ src/cryptolight/
   backtest/
     engine.py              # 백테스트 엔진
     walk_forward.py        # Walk-Forward 검증
+  web/
+    app.py                 # FastAPI 웹 대시보드
+    templates/dashboard.html  # 글래스모피즘 UI
   health.py                # 헬스 모니터
 ```
 
 ## 테스트
 
 ```bash
-pytest                # 전체 테스트 (136개)
+pytest                # 전체 테스트 (142개)
 ruff check src/       # 린트
 ruff format src/      # 포맷
 ```
