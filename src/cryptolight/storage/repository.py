@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 
 from cryptolight.storage.models import TradeRecord
@@ -17,6 +18,7 @@ class TradeRepository:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self._create_tables()
 
     def _create_tables(self):
@@ -66,13 +68,14 @@ class TradeRepository:
         self._conn.commit()
 
     def save_trade(self, trade: TradeRecord) -> int:
-        cursor = self._conn.execute(
-            """INSERT INTO trades (symbol, side, price, quantity, amount_krw, commission, reason, strategy, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (trade.symbol, trade.side, trade.price, trade.quantity,
-             trade.amount_krw, trade.commission, trade.reason, trade.strategy, trade.timestamp),
-        )
-        self._conn.commit()
+        with self._lock:
+            cursor = self._conn.execute(
+                """INSERT INTO trades (symbol, side, price, quantity, amount_krw, commission, reason, strategy, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (trade.symbol, trade.side, trade.price, trade.quantity,
+                 trade.amount_krw, trade.commission, trade.reason, trade.strategy, trade.timestamp),
+            )
+            self._conn.commit()
         logger.info("거래 기록 저장: %s %s %.8f @ %s", trade.side, trade.symbol, trade.quantity, f"{trade.price:,.0f}")
         return cursor.lastrowid
 
@@ -112,9 +115,15 @@ class TradeRepository:
             else:
                 total_sold += row["amount_krw"]
 
+        # 매도가 있을 때만 실현 손익 계산 (매수만 있는 날은 아직 미실현)
+        if total_sold > 0:
+            realized_pnl = total_sold - total_bought - total_commission
+        else:
+            realized_pnl = -total_commission  # 수수료만 차감
+
         return {
             "date": date,
-            "realized_pnl": total_sold - total_bought - total_commission,
+            "realized_pnl": realized_pnl,
             "total_bought": total_bought,
             "total_sold": total_sold,
             "total_commission": total_commission,
@@ -123,17 +132,18 @@ class TradeRepository:
 
     def save_positions(self, positions: dict, balance_krw: float) -> None:
         """포지션과 잔고를 DB에 저장한다."""
-        self._conn.execute("DELETE FROM positions")
-        for symbol, pos in positions.items():
+        with self._lock:
+            self._conn.execute("DELETE FROM positions")
+            for symbol, pos in positions.items():
+                self._conn.execute(
+                    "REPLACE INTO positions (symbol, quantity, avg_price, total_cost) VALUES (?, ?, ?, ?)",
+                    (symbol, pos.quantity, pos.avg_price, pos.total_cost),
+                )
             self._conn.execute(
-                "REPLACE INTO positions (symbol, quantity, avg_price, total_cost) VALUES (?, ?, ?, ?)",
-                (symbol, pos.quantity, pos.avg_price, pos.total_cost),
+                "REPLACE INTO paper_state (key, value) VALUES (?, ?)",
+                ("balance_krw", balance_krw),
             )
-        self._conn.execute(
-            "REPLACE INTO paper_state (key, value) VALUES (?, ?)",
-            ("balance_krw", balance_krw),
-        )
-        self._conn.commit()
+            self._conn.commit()
         logger.debug("포지션 저장 완료: %d개 종목, 잔고 %s", len(positions), f"{balance_krw:,.0f}")
 
     def load_positions(self) -> tuple[dict, float | None]:
@@ -206,11 +216,12 @@ class TradeRepository:
     ) -> None:
         """전략 전환을 기록한다."""
         from datetime import datetime
-        self._conn.execute(
-            "INSERT INTO strategy_switches (from_strategy, to_strategy, reason, switched_at) VALUES (?, ?, ?, ?)",
-            (from_strategy, to_strategy, reason, datetime.now().isoformat()),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO strategy_switches (from_strategy, to_strategy, reason, switched_at) VALUES (?, ?, ?, ?)",
+                (from_strategy, to_strategy, reason, datetime.now().isoformat()),
+            )
+            self._conn.commit()
 
     def get_strategy_switches(self, limit: int = 10) -> list[dict]:
         """최근 전략 전환 이력을 반환한다."""

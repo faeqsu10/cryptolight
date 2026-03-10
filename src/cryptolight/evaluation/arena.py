@@ -111,13 +111,10 @@ class StrategyArena:
         }
 
     def _calc_sharpe_from_result(self, result) -> float:
-        """백테스트 결과에서 Sharpe ratio를 추정한다."""
+        """백테스트 결과에서 Sharpe ratio를 반환한다."""
         if result.total_trades < 2:
             return 0.0
-        if result.total_return_pct == 0:
-            return 0.0
-        # Buy&Hold 대비 alpha를 sharpe 근사로 사용
-        return result.total_return_pct / max(abs(result.total_return_pct), 1.0)
+        return result.sharpe_ratio
 
     def summary_text(self, results: list[dict]) -> str:
         """경기장 결과 요약 텍스트."""

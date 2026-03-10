@@ -1,6 +1,8 @@
 """Gemini AI 어시스턴트 — 텔레그램 /ask 명령어용"""
 
+import html as html_mod
 import logging
+import re
 from datetime import date
 
 import httpx
@@ -16,6 +18,19 @@ SYSTEM_PROMPT = (
     "답변은 텔레그램 메시지에 적합하게 짧고 명확하게 작성합니다. "
     "투자 조언이 아닌 정보 제공임을 유의합니다."
 )
+
+
+def markdown_to_telegram_html(text: str) -> str:
+    """마크다운 텍스트를 텔레그램 HTML로 변환한다."""
+    # 먼저 HTML 특수문자 이스케이프
+    text = html_mod.escape(text)
+    # **bold** → <b>bold</b>
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    # *italic* → <i>italic</i> (볼드 변환 후 처리)
+    text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
+    # `code` → <code>code</code>
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    return text
 
 
 class AIAssistant:
@@ -56,7 +71,7 @@ class AIAssistant:
                     "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
                     "contents": [{"parts": [{"text": user_content}]}],
                     "generationConfig": {
-                        "maxOutputTokens": 500,
+                        "maxOutputTokens": 2048,
                         "temperature": 0.7,
                     },
                 },

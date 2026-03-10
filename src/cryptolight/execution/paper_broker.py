@@ -1,4 +1,5 @@
 import logging
+import threading
 from dataclasses import dataclass
 
 from cryptolight.exchange.base import OrderResult
@@ -27,6 +28,7 @@ class PaperBroker(BaseBroker):
         self.initial_balance = initial_balance
         self.positions: dict[str, PaperPosition] = {}
         self._repo = repo
+        self._lock = threading.Lock()
 
         # DB에서 포지션 복구
         if self._repo:
@@ -41,24 +43,25 @@ class PaperBroker(BaseBroker):
             if saved_balance is not None:
                 self.balance_krw = saved_balance
 
-    def buy_market(self, symbol: str, amount_krw: float, current_price: float, reason: str = "") -> OrderResult | None:
-        commission = amount_krw * self.COMMISSION_RATE
-        total_cost = amount_krw + commission
+    def buy_market(self, symbol: str, amount_krw: float, current_price: float, reason: str = "", strategy: str = "") -> OrderResult | None:
+        with self._lock:
+            commission = amount_krw * self.COMMISSION_RATE
+            total_cost = amount_krw + commission
 
-        if total_cost > self.balance_krw:
-            logger.warning("잔고 부족: 필요 %s, 가용 %s", f"{total_cost:,.0f}", f"{self.balance_krw:,.0f}")
-            return None
+            if total_cost > self.balance_krw:
+                logger.warning("잔고 부족: 필요 %s, 가용 %s", f"{total_cost:,.0f}", f"{self.balance_krw:,.0f}")
+                return None
 
-        quantity = amount_krw / current_price
-        self.balance_krw -= total_cost
+            quantity = amount_krw / current_price
+            self.balance_krw -= total_cost
 
-        # 포지션 업데이트
-        pos = self.positions.get(symbol, PaperPosition(symbol=symbol))
-        new_total = pos.quantity * pos.avg_price + amount_krw
-        pos.quantity += quantity
-        pos.avg_price = new_total / pos.quantity if pos.quantity > 0 else 0
-        pos.total_cost += amount_krw
-        self.positions[symbol] = pos
+            # 포지션 업데이트
+            pos = self.positions.get(symbol, PaperPosition(symbol=symbol))
+            new_total = pos.quantity * pos.avg_price + amount_krw
+            pos.quantity += quantity
+            pos.avg_price = new_total / pos.quantity if pos.quantity > 0 else 0
+            pos.total_cost += amount_krw
+            self.positions[symbol] = pos
 
         logger.info(
             "[PAPER 매수] %s %.8f @ %s (수수료: %s)",
@@ -69,7 +72,7 @@ class PaperBroker(BaseBroker):
         trade = TradeRecord(
             symbol=symbol, side="buy", price=current_price,
             quantity=quantity, amount_krw=amount_krw,
-            commission=commission, reason=reason,
+            commission=commission, reason=reason, strategy=strategy,
         )
         if self._repo:
             self._repo.save_trade(trade)
@@ -82,22 +85,23 @@ class PaperBroker(BaseBroker):
             state="done",
         )
 
-    def sell_market(self, symbol: str, quantity: float, current_price: float, reason: str = "") -> OrderResult | None:
-        pos = self.positions.get(symbol)
-        if not pos or pos.quantity < quantity:
-            available = pos.quantity if pos else 0
-            logger.warning("보유 수량 부족: 필요 %.8f, 보유 %.8f", quantity, available)
-            return None
+    def sell_market(self, symbol: str, quantity: float, current_price: float, reason: str = "", strategy: str = "") -> OrderResult | None:
+        with self._lock:
+            pos = self.positions.get(symbol)
+            if not pos or pos.quantity < quantity:
+                available = pos.quantity if pos else 0
+                logger.warning("보유 수량 부족: 필요 %.8f, 보유 %.8f", quantity, available)
+                return None
 
-        proceeds = quantity * current_price
-        commission = proceeds * self.COMMISSION_RATE
-        self.balance_krw += proceeds - commission
+            proceeds = quantity * current_price
+            commission = proceeds * self.COMMISSION_RATE
+            self.balance_krw += proceeds - commission
 
-        # 포지션 업데이트
-        pos.quantity -= quantity
-        if pos.quantity < 1e-10:
-            pos.quantity = 0
-            pos.avg_price = 0
+            # 포지션 업데이트
+            pos.quantity -= quantity
+            if pos.quantity < 1e-10:
+                pos.quantity = 0
+                pos.avg_price = 0
 
         logger.info(
             "[PAPER 매도] %s %.8f @ %s (수수료: %s)",
@@ -107,7 +111,7 @@ class PaperBroker(BaseBroker):
         trade = TradeRecord(
             symbol=symbol, side="sell", price=current_price,
             quantity=quantity, amount_krw=proceeds,
-            commission=commission, reason=reason,
+            commission=commission, reason=reason, strategy=strategy,
         )
         if self._repo:
             self._repo.save_trade(trade)

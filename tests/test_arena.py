@@ -98,5 +98,6 @@ def test_calc_sharpe_normal():
     class MockResult:
         total_trades = 10
         total_return_pct = 15.0
+        sharpe_ratio = 1.5
     sharpe = arena._calc_sharpe_from_result(MockResult())
-    assert sharpe > 0
+    assert sharpe == 1.5

@@ -7,8 +7,9 @@ from cryptolight.config.settings import Settings
 
 
 class TestCandleIntervalSetting:
-    def test_default_is_minute240(self):
-        s = Settings(upbit_access_key="x", upbit_secret_key="x")
+    def test_default_is_minute240(self, monkeypatch):
+        monkeypatch.delenv("CANDLE_INTERVAL", raising=False)
+        s = Settings(_env_file=None, upbit_access_key="x", upbit_secret_key="x")
         assert s.candle_interval == "minute240"
 
     def test_can_set_day(self):
@@ -25,8 +26,9 @@ class TestCandleIntervalSetting:
 
 
 class TestAutoSelectSymbolsSetting:
-    def test_default_false(self):
-        s = Settings(upbit_access_key="x", upbit_secret_key="x")
+    def test_default_false(self, monkeypatch):
+        monkeypatch.delenv("AUTO_SELECT_SYMBOLS", raising=False)
+        s = Settings(_env_file=None, upbit_access_key="x", upbit_secret_key="x")
         assert s.auto_select_symbols is False
 
     def test_screening_defaults(self):

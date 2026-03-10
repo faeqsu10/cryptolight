@@ -5,8 +5,12 @@ from pydantic import ValidationError
 from cryptolight.config.settings import Settings
 
 
-def test_default_settings():
-    s = Settings()
+def test_default_settings(monkeypatch):
+    monkeypatch.delenv("TRAILING_STOP_PCT", raising=False)
+    monkeypatch.delenv("TAKE_PROFIT_PCT", raising=False)
+    monkeypatch.delenv("CANDLE_INTERVAL", raising=False)
+    monkeypatch.delenv("AUTO_SELECT_SYMBOLS", raising=False)
+    s = Settings(_env_file=None)
     assert s.trade_mode == "paper"
     assert s.max_order_amount_krw == 50_000
     assert s.absolute_max_order_krw == 500_000

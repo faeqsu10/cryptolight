@@ -25,7 +25,7 @@ from cryptolight.storage.repository import TradeRepository
 from cryptolight.storage.strategy_tracker import StrategyTracker
 import html as html_mod
 
-from cryptolight.bot.ai_assistant import AIAssistant
+from cryptolight.bot.ai_assistant import AIAssistant, markdown_to_telegram_html
 from cryptolight.evaluation import PerformanceEvaluator, StrategyArena, AdaptiveController
 from cryptolight.market.screener import run_screening_pipeline
 from cryptolight.strategy import create_strategy
@@ -44,6 +44,7 @@ _volume_filter: VolumeFilter | None = None
 _market_snapshots: dict[str, dict] = {}
 _ai_assistant: AIAssistant | None = None
 _cmd_handler: CommandHandler | None = None
+_active_strategy_name: str = ""  # HIGH-1: mutable 전략명 (자기개선 루프에서 전환)
 
 
 def run_strategy(
@@ -56,10 +57,12 @@ def run_strategy(
 ):
     """각 종목에 대해 전략을 실행하고 시그널을 전송한다."""
     logger = setup_logger("cryptolight.main")
-    if settings.strategy_name == "ensemble":
+    # HIGH-1: mutable 전략명 사용 (자기개선 루프에서 전환 가능)
+    strategy_name = _active_strategy_name or settings.strategy_name
+    if strategy_name == "ensemble":
         strategy = create_strategy("ensemble", strategy_names=settings.ensemble_strategy_list)
     else:
-        strategy = create_strategy(settings.strategy_name)
+        strategy = create_strategy(strategy_name)
 
     for symbol in symbols:
         # 캔들 캐시 활용
@@ -83,31 +86,44 @@ def run_strategy(
             if not (_cmd_handler and _cmd_handler.muted):
                 bot.send_surge_alert(symbol, ticker.price, ticker.change_rate)
 
-        # 손절/익절 체크 (paper 모드만 — live는 포지션을 broker가 관리하지 않음)
-        if isinstance(broker, PaperBroker) and risk_guard:
-            pos = broker.positions.get(symbol)
-            if pos and pos.quantity > 0:
+        # 손절/익절 체크 (Paper + Live 모두 지원)
+        if risk_guard:
+            _sl_avg_price = 0.0
+            _sl_quantity = 0.0
+            if isinstance(broker, PaperBroker):
+                pos = broker.positions.get(symbol)
+                if pos and pos.quantity > 0:
+                    _sl_avg_price = pos.avg_price
+                    _sl_quantity = pos.quantity
+            elif isinstance(broker, LiveBroker):
+                currency = symbol.split("-")[1]
+                coin_bal = client.get_balance(currency)
+                if coin_bal and coin_bal.available > 0:
+                    _sl_quantity = coin_bal.available
+                    _sl_avg_price = coin_bal.avg_buy_price if hasattr(coin_bal, "avg_buy_price") and coin_bal.avg_buy_price else 0.0
+
+            if _sl_quantity > 0 and _sl_avg_price > 0:
                 sl_tp = risk_guard.check_stop_loss_take_profit(
-                    symbol, pos.avg_price, pos.quantity, ticker.price,
+                    symbol, _sl_avg_price, _sl_quantity, ticker.price,
                 )
                 if sl_tp == "stop_loss":
-                    order = broker.sell_market(symbol, pos.quantity, ticker.price, reason="손절 트리거")
+                    order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="손절 트리거")
                     if order:
-                        logger.warning("손절 매도 실행: %s %.8f @ %s", symbol, pos.quantity, f"{ticker.price:,.0f}")
+                        logger.warning("손절 매도 실행: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
                         if bot:
                             bot.send_message(f"\U0001f534 <b>손절 매도</b>\n{symbol} @ {ticker.price:,.0f} KRW")
                     continue
                 elif sl_tp == "take_profit":
-                    order = broker.sell_market(symbol, pos.quantity, ticker.price, reason="익절 트리거")
+                    order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="익절 트리거")
                     if order:
-                        logger.info("익절 매도 실행: %s %.8f @ %s", symbol, pos.quantity, f"{ticker.price:,.0f}")
+                        logger.info("익절 매도 실행: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
                         if bot:
                             bot.send_message(f"\U0001f7e2 <b>익절 매도</b>\n{symbol} @ {ticker.price:,.0f} KRW")
                     continue
                 elif sl_tp == "trailing_stop":
-                    order = broker.sell_market(symbol, pos.quantity, ticker.price, reason="트레일링 스톱")
+                    order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="트레일링 스톱")
                     if order:
-                        logger.warning("트레일링 스톱 매도: %s %.8f @ %s", symbol, pos.quantity, f"{ticker.price:,.0f}")
+                        logger.warning("트레일링 스톱 매도: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
                         if bot:
                             bot.send_message(f"\U0001f7e1 <b>트레일링 스톱</b>\n{symbol} @ {ticker.price:,.0f} KRW")
                     continue
@@ -172,15 +188,19 @@ def run_strategy(
                         and broker.positions[symbol].quantity > 0
                     )
                 elif isinstance(broker, LiveBroker):
-                    krw_bal = client.get_balance("KRW")
+                    # HIGH-3: 잔고 일괄 조회 재활용
+                    if "_live_balances" not in _market_snapshots:
+                        all_balances = client.get_balances()
+                        _market_snapshots["_live_balances"] = {b.currency: b for b in all_balances}
+                    bal_map = _market_snapshots["_live_balances"]
+                    krw_bal = bal_map.get("KRW")
                     _balance_krw = krw_bal.available if krw_bal else 0.0
-                    all_balances = client.get_balances()
                     _active_positions = sum(
-                        1 for b in all_balances
+                        1 for b in bal_map.values()
                         if b.currency != "KRW" and b.available > 0
                     )
                     currency = symbol.split("-")[1]
-                    coin_bal = client.get_balance(currency)
+                    coin_bal = bal_map.get(currency)
                     _already_holding = bool(coin_bal and coin_bal.available > 0)
                 else:
                     _balance_krw = 0.0
@@ -209,7 +229,7 @@ def run_strategy(
             else:
                 order_amount = settings.max_order_amount_krw
 
-            order = broker.buy_market(symbol, order_amount, ticker.price, reason=signal_result.reason)
+            order = broker.buy_market(symbol, order_amount, ticker.price, reason=signal_result.reason, strategy=strategy_name)
             if order:
                 if _cooldown:
                     _cooldown.record_trade(symbol)
@@ -219,7 +239,7 @@ def run_strategy(
             if isinstance(broker, PaperBroker):
                 pos = broker.positions.get(symbol)
                 if pos and pos.quantity > 0:
-                    order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason)
+                    order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
                     if order:
                         logger.info("매도 체결: %s %.8f [%s]", symbol, pos.quantity, settings.trade_mode)
                 else:
@@ -229,7 +249,7 @@ def run_strategy(
                 currency = symbol.split("-")[1]
                 balance = client.get_balance(currency)
                 if balance and balance.available > 0:
-                    order = broker.sell_market(symbol, balance.available, ticker.price, reason=signal_result.reason)
+                    order = broker.sell_market(symbol, balance.available, ticker.price, reason=signal_result.reason, strategy=strategy_name)
                     if order:
                         logger.info("매도 체결: %s %.8f [live]", symbol, balance.available)
                 else:
@@ -255,12 +275,12 @@ def run_strategy(
         elif bot and signal_result.action == "hold":
             logger.info("관망 시그널 — 텔레그램 전송 생략")
 
-    # Paper trading 요약 + 시장 상태
+    # HIGH-3: Live 모드 잔고 캐시 클리어 (다음 주기에 갱신)
+    _market_snapshots.pop("_live_balances", None)
+
+    # Paper trading 요약 + 시장 상태 (MEDIUM-3: 이미 수집된 가격 재활용)
     if isinstance(broker, PaperBroker):
-        prices = {}
-        for symbol in symbols:
-            ticker = client.get_ticker(symbol)
-            prices[symbol] = ticker.price
+        prices = {sym: snap["price"] for sym, snap in _market_snapshots.items() if isinstance(snap, dict) and "price" in snap}
         summary = broker.summary_text(prices)
 
         # 시장 상태 라인 추가
@@ -375,6 +395,9 @@ def self_improvement_job(
             controller.record_switch(
                 switch_decision["from"], switch_decision["to"], switch_decision["reason"],
             )
+            # HIGH-1: mutable 전략명 실제 적용
+            global _active_strategy_name
+            _active_strategy_name = switch_decision["to"]
             msg = (
                 f"전략 전환: {switch_decision['from']} → {switch_decision['to']}\n"
                 f"사유: {switch_decision['reason']}"
@@ -538,7 +561,7 @@ def command_loop(
                     remaining = _ai_assistant.remaining_today
                     bot.send_message(
                         f"\U0001f916 <b>AI 답변</b>\n\n"
-                        f"{html_mod.escape(answer)}\n\n"
+                        f"{markdown_to_telegram_html(answer)}\n\n"
                         f"<i>남은 횟수: {remaining}회/일</i>"
                     )
         except Exception:
@@ -696,6 +719,8 @@ def main():
         try:
             run_strategy(client, bot, broker, risk_guard, symbols, settings)
         finally:
+            if _ai_assistant:
+                _ai_assistant.close()
             if bot:
                 bot.close()
             if cmd_handler:
@@ -796,6 +821,8 @@ def main():
         scheduler.start()
     finally:
         logger.info("스케줄러 종료 — 리소스 정리")
+        if _ai_assistant:
+            _ai_assistant.close()
         if bot:
             bot.send_message("\U0001f6d1 cryptolight 종료됩니다.")
             bot.close()

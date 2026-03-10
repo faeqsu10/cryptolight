@@ -42,7 +42,7 @@ class LiveBroker(BaseBroker):
         logger.warning("주문 상태 미확정: %s (state=%s)", order.order_id, order.state)
         return order
 
-    def buy_market(self, symbol: str, amount_krw: float, current_price: float, reason: str = "") -> OrderResult | None:
+    def buy_market(self, symbol: str, amount_krw: float, current_price: float, reason: str = "", strategy: str = "") -> OrderResult | None:
         # 하드캡 검증
         if amount_krw > self.ABSOLUTE_MAX_ORDER_KRW:
             logger.error(
@@ -70,7 +70,7 @@ class LiveBroker(BaseBroker):
                 trade = TradeRecord(
                     symbol=symbol, side="buy", price=actual_price,
                     quantity=actual_qty, amount_krw=amount_krw,
-                    commission=commission, reason=reason,
+                    commission=commission, reason=reason, strategy=strategy,
                 )
                 self._repo.save_trade(trade)
 
@@ -79,7 +79,7 @@ class LiveBroker(BaseBroker):
             logger.exception("매수 주문 실패: %s", symbol)
             return None
 
-    def sell_market(self, symbol: str, quantity: float, current_price: float, reason: str = "") -> OrderResult | None:
+    def sell_market(self, symbol: str, quantity: float, current_price: float, reason: str = "", strategy: str = "") -> OrderResult | None:
         try:
             order = self._client.sell_market(symbol, quantity)
             logger.info("[LIVE 매도] %s %.8f — 주문ID: %s", symbol, quantity, order.order_id)
@@ -98,7 +98,7 @@ class LiveBroker(BaseBroker):
                 trade = TradeRecord(
                     symbol=symbol, side="sell", price=actual_price,
                     quantity=quantity, amount_krw=proceeds,
-                    commission=commission, reason=reason,
+                    commission=commission, reason=reason, strategy=strategy,
                 )
                 self._repo.save_trade(trade)
 
