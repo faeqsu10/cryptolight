@@ -1,16 +1,45 @@
 """Glassmorphism 웹 대시보드 — FastAPI 앱 + API 엔드포인트"""
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 logger = logging.getLogger("cryptolight.web")
 
-app = FastAPI(title="cryptolight dashboard", docs_url=None, redoc_url=None)
+app = FastAPI(title="cryptolight dashboard", docs_url=None, redoc_url=None, openapi_url=None)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+# 보안 헤더 미들웨어
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"
+        )
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+@dataclass(frozen=True)
+class WebSettings:
+    """웹 레이어에 필요한 설정만 노출 (API 키 등 민감 정보 제외)."""
+    strategy_name: str = "N/A"
+    trade_mode: str = "N/A"
+    symbol_list: tuple = ()
+    schedule_interval_minutes: int = 0
+
 
 # main.py에서 주입하는 데이터 참조
 _refs: dict = {}
@@ -28,21 +57,30 @@ def configure(
     _refs["broker"] = broker
     _refs["repo"] = repo
     _refs["health"] = health
-    _refs["settings"] = settings
+    # 민감 정보 제외하고 필요한 설정만 전달
+    if settings:
+        _refs["settings"] = WebSettings(
+            strategy_name=settings.strategy_name,
+            trade_mode=settings.trade_mode,
+            symbol_list=tuple(settings.symbol_list),
+            schedule_interval_minutes=settings.schedule_interval_minutes,
+        )
+    else:
+        _refs["settings"] = WebSettings()
 
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    settings = _refs.get("settings")
+    settings = _refs.get("settings", WebSettings())
     return templates.TemplateResponse(request, "dashboard.html", {
-        "strategy_name": settings.strategy_name if settings else "N/A",
-        "trade_mode": settings.trade_mode if settings else "N/A",
+        "strategy_name": settings.strategy_name,
+        "trade_mode": settings.trade_mode,
     })
 
 
 @app.get("/api/market")
 async def api_market():
-    snapshots = _refs.get("market_snapshots", {})
+    snapshots = dict(_refs.get("market_snapshots", {}))  # shallow copy for thread safety
     result = {}
     for sym, snap in snapshots.items():
         result[sym] = {
@@ -61,7 +99,7 @@ async def api_portfolio():
     from cryptolight.execution.paper_broker import PaperBroker
 
     broker = _refs.get("broker")
-    snapshots = _refs.get("market_snapshots", {})
+    snapshots = dict(_refs.get("market_snapshots", {}))  # shallow copy
 
     if not isinstance(broker, PaperBroker):
         return {
@@ -98,7 +136,7 @@ async def api_portfolio():
 
 
 @app.get("/api/trades")
-async def api_trades(limit: int = 20):
+async def api_trades(limit: int = Query(default=20, ge=1, le=100)):
     repo = _refs.get("repo")
     if not repo:
         return []
@@ -122,7 +160,7 @@ async def api_trades(limit: int = 20):
 @app.get("/api/status")
 async def api_status():
     health = _refs.get("health")
-    settings = _refs.get("settings")
+    settings = _refs.get("settings", WebSettings())
 
     health_data = {}
     if health:
@@ -135,9 +173,9 @@ async def api_status():
         }
 
     return {
-        "strategy": settings.strategy_name if settings else "N/A",
-        "trade_mode": settings.trade_mode if settings else "N/A",
-        "symbols": settings.symbol_list if settings else [],
-        "interval_minutes": settings.schedule_interval_minutes if settings else 0,
+        "strategy": settings.strategy_name,
+        "trade_mode": settings.trade_mode,
+        "symbols": list(settings.symbol_list),
+        "interval_minutes": settings.schedule_interval_minutes,
         "health": health_data,
     }
