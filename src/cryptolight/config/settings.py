@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     # 웹 대시보드
     enable_web: bool = False
     web_host: str = "127.0.0.1"
-    web_port: int = 8080
+    web_port: int = 8090
 
     # 로깅
     log_level: str = "INFO"
