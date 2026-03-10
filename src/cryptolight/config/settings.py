@@ -37,6 +37,15 @@ class Settings(BaseSettings):
     strategy_name: str = "score"  # rsi | macd | bollinger | volatility_breakout | ensemble | score
     ensemble_strategies: str = "rsi,macd,bollinger"  # 앙상블에 사용할 전략 목록
     min_confidence: float = 0.4  # 최소 신뢰도 — 이 미만이면 주문 차단
+    candle_interval: str = "minute240"  # 캔들 주기: day, minute240(4시간), minute60(1시간) 등
+
+    # 자동 종목 스크리닝
+    auto_select_symbols: bool = False  # True면 거래량 상위 자동 스크리닝
+    top_volume_limit: int = 10  # 거래량 상위 N개 후보
+    min_daily_volume_krw: int = 10_000_000_000  # 최소 일 거래대금 (100억원)
+    screening_interval_hours: int = 24  # 스크리닝 주기 (시간)
+    min_backtest_sharpe: float = 0.0  # 백테스트 최소 Sharpe ratio
+    max_correlation: float = 0.9  # 종목 간 최대 상관계수
 
     # Google AI (Gemini)
     google_api_key: str = ""

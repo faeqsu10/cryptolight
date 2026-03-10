@@ -180,6 +180,65 @@ class UpbitClient(ExchangeClient):
             low_24h=float(item.get("low_price", 0)),
         )
 
+    # ── 스크리닝 ──
+
+    def get_markets(self, quote: str = "KRW") -> list[dict]:
+        """마켓 목록을 조회한다. market_warning 포함."""
+        data = self._get("/market/all", params={"is_details": "true"})
+        return [
+            {
+                "market": item["market"],
+                "korean_name": item.get("korean_name", ""),
+                "english_name": item.get("english_name", ""),
+                "market_warning": item.get("market_warning", "NONE"),
+            }
+            for item in data
+            if item["market"].startswith(f"{quote}-")
+        ]
+
+    def get_tickers(self, symbols: list[str]) -> list[Ticker]:
+        """여러 종목의 현재 시세를 일괄 조회한다."""
+        if not symbols:
+            return []
+        markets = ",".join(symbols)
+        data = self._get("/ticker", params={"markets": markets})
+        return [
+            Ticker(
+                symbol=item["market"],
+                price=float(item["trade_price"]),
+                change_rate=float(item.get("signed_change_rate", 0)),
+                volume_24h=float(item.get("acc_trade_volume_24h", 0)),
+                high_24h=float(item.get("high_price", 0)),
+                low_24h=float(item.get("low_price", 0)),
+            )
+            for item in data
+        ]
+
+    def get_top_volume_symbols(
+        self, quote: str = "KRW", limit: int = 10,
+        min_volume_krw: float = 10_000_000_000,
+    ) -> list[str]:
+        """거래대금 상위 종목을 반환한다. 투자유의/경고 종목 제외."""
+        markets = self.get_markets(quote)
+        # 투자유의/경고 종목 제외
+        safe_markets = [m for m in markets if m["market_warning"] == "NONE"]
+        if not safe_markets:
+            return []
+
+        symbols = [m["market"] for m in safe_markets]
+        # 업비트 ticker API는 최대 100개까지 한번에 조회 가능
+        tickers = self.get_tickers(symbols[:100])
+
+        # 거래대금 계산 (가격 × 24시간 거래량) 및 최소 거래대금 필터
+        ranked = []
+        for t in tickers:
+            trade_value = t.price * t.volume_24h
+            if trade_value >= min_volume_krw:
+                ranked.append((t.symbol, trade_value))
+
+        ranked.sort(key=lambda x: x[1], reverse=True)
+        return [sym for sym, _ in ranked[:limit]]
+
     # ── 주문 ──
 
     def buy_market(self, symbol: str, amount_krw: float) -> OrderResult:

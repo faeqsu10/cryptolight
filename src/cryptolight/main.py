@@ -27,6 +27,7 @@ import html as html_mod
 
 from cryptolight.bot.ai_assistant import AIAssistant
 from cryptolight.evaluation import PerformanceEvaluator, StrategyArena, AdaptiveController
+from cryptolight.market.screener import run_screening_pipeline
 from cryptolight.strategy import create_strategy
 from cryptolight.utils import setup_logger
 
@@ -63,10 +64,11 @@ def run_strategy(
     for symbol in symbols:
         # 캔들 캐시 활용
         candle_count = strategy.required_candle_count() * 2
-        cache_key = _candle_cache.make_key(symbol, "day", candle_count) if _candle_cache else ""
+        interval = settings.candle_interval
+        cache_key = _candle_cache.make_key(symbol, interval, candle_count) if _candle_cache else ""
         candles = (_candle_cache.get(cache_key) if _candle_cache else None)
         if candles is None:
-            candles = client.get_candles(symbol, interval="day", count=candle_count)
+            candles = client.get_candles(symbol, interval=interval, count=candle_count)
             if _candle_cache:
                 _candle_cache.put(cache_key, candles)
         ticker = client.get_ticker(symbol)
@@ -643,11 +645,56 @@ def main():
         settings.take_profit_pct,
     )
 
+    # ── 자동 종목 스크리닝 ──
+    symbols = settings.symbol_list
+    if settings.auto_select_symbols:
+        logger.info("자동 종목 스크리닝 시작 (상위 %d개, 최소 거래대금 %s원)",
+                     settings.top_volume_limit, f"{settings.min_daily_volume_krw:,}")
+        try:
+            screening = run_screening_pipeline(
+                client=client,
+                strategy_name=settings.strategy_name,
+                top_limit=settings.top_volume_limit,
+                min_volume_krw=settings.min_daily_volume_krw,
+                min_sharpe=settings.min_backtest_sharpe,
+                max_correlation=settings.max_correlation,
+                max_positions=settings.max_positions,
+                candle_interval=settings.candle_interval,
+            )
+            if screening.selected:
+                symbols = screening.selected
+                logger.info("자동 스크리닝 결과: %s", symbols)
+                if bot:
+                    details_lines = []
+                    for sym in screening.selected:
+                        d = screening.backtest_details.get(sym, {})
+                        if d and not d.get("skipped"):
+                            details_lines.append(
+                                f"  {sym}: Sharpe={d['sharpe']:.4f}, "
+                                f"수익={d['return_pct']:+.2f}%, "
+                                f"거래={d['total_trades']}회"
+                            )
+                        else:
+                            details_lines.append(f"  {sym}: 백테스트 데이터 없음")
+                    msg = (
+                        f"후보: {len(screening.candidates)}개\n"
+                        f"백테스트 통과: {len(screening.backtest_passed)}개\n"
+                        f"상관관계 제외: {screening.correlation_removed}\n"
+                        f"최종 선정:\n" + "\n".join(details_lines)
+                    )
+                    bot.send_message(
+                        f"\U0001f50d <b>자동 종목 스크리닝</b>\n<pre>{html_mod.escape(msg)}</pre>"
+                    )
+            else:
+                logger.warning("자동 스크리닝 결과 없음 — 기본 종목 사용: %s", settings.symbol_list)
+        except Exception:
+            logger.exception("자동 스크리닝 실패 — 기본 종목 사용")
+
     # ── 1회 실행 모드 ──
     if once_mode:
         logger.info("1회 실행 모드")
         try:
-            run_strategy(client, bot, broker, risk_guard, settings.symbol_list, settings)
+            run_strategy(client, bot, broker, risk_guard, symbols, settings)
         finally:
             if bot:
                 bot.close()
@@ -668,7 +715,7 @@ def main():
         minutes=settings.schedule_interval_minutes,
         max_instances=1,
         misfire_grace_time=60,
-        args=[client, bot, broker, risk_guard, settings.symbol_list, settings],
+        args=[client, bot, broker, risk_guard, symbols, settings],
         id="strategy",
         next_run_time=None,  # 첫 실행은 아래에서 즉시 수행
     )
@@ -678,7 +725,7 @@ def main():
     if cmd_handler:
         cmd_thread = threading.Thread(
             target=command_loop,
-            args=[cmd_handler, scheduler, bot, broker, repo, client, settings.symbol_list, settings, cmd_stop_event],
+            args=[cmd_handler, scheduler, bot, broker, repo, client, symbols, settings, cmd_stop_event],
             daemon=True,
             name="command-poll",
         )
@@ -690,7 +737,7 @@ def main():
             "cron",
             hour=9,
             minute=0,
-            args=[bot, broker, repo, client, settings.symbol_list],
+            args=[bot, broker, repo, client, symbols],
             id="daily_summary",
         )
 
@@ -741,7 +788,7 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
 
     # 스케줄러 시작 전 1회 즉시 실행
-    strategy_job(client, bot, broker, risk_guard, settings.symbol_list, settings)
+    strategy_job(client, bot, broker, risk_guard, symbols, settings)
 
     try:
         # next_run_time을 설정하여 다음 interval부터 실행되도록
