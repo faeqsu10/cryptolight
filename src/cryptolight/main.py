@@ -281,6 +281,14 @@ def run_strategy(
     # Paper trading 요약 + 시장 상태 (MEDIUM-3: 이미 수집된 가격 재활용)
     if isinstance(broker, PaperBroker):
         prices = {sym: snap["price"] for sym, snap in _market_snapshots.items() if isinstance(snap, dict) and "price" in snap}
+        # 보유 중이지만 현재 symbols에 없는 종목도 가격 조회
+        for pos_symbol, pos in broker.positions.items():
+            if pos.quantity > 0 and pos_symbol not in prices:
+                try:
+                    pos_ticker = client.get_ticker(pos_symbol)
+                    prices[pos_symbol] = pos_ticker.price
+                except Exception:
+                    logger.warning("보유 종목 가격 조회 실패: %s", pos_symbol)
         summary = broker.summary_text(prices)
 
         # 시장 상태 라인 추가
