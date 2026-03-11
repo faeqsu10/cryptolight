@@ -19,17 +19,27 @@ PARAM_RANGES: dict[str, dict] = {
         "oversold": (15, 40),
     },
     "macd": {
-        "fast_period": (8, 16),
-        "slow_period": (20, 35),
+        "fast": (8, 16),
+        "slow": (20, 35),
         "signal_period": (5, 14),
     },
     "bollinger": {
         "period": (10, 30),
-        "num_std": (1.5, 3.0),
+        "std_mult": (1.5, 3.0),
     },
     "volatility_breakout": {
-        "k_factor": (0.3, 0.8),
-        "lookback": (10, 30),
+        "k": (0.3, 0.8),
+    },
+    "score": {
+        "rsi_period": (10, 20),
+        "rsi_oversold": (25, 40),
+        "rsi_overbought": (60, 75),
+        "macd_fast": (8, 16),
+        "macd_slow": (20, 35),
+        "macd_signal": (5, 14),
+        "bb_period": (14, 30),
+        "bb_std_mult": (1.5, 3.0),
+        "volume_period": (10, 30),
     },
 }
 
@@ -126,6 +136,15 @@ class ParameterOptimizer:
         )
         return result
 
+    def evaluate_params(
+        self,
+        strategy_name: str,
+        params: dict,
+        candles: list[Candle],
+    ) -> dict | None:
+        """특정 파라미터 조합의 백테스트 + Walk-Forward 결과를 평가한다."""
+        return self._evaluate_params(strategy_name, params, candles)
+
     def _sample_params(self, ranges: dict) -> dict:
         """파라미터 범위에서 랜덤 샘플링."""
         params = {}
@@ -167,7 +186,7 @@ class ParameterOptimizer:
         if not wf_result.folds:
             return None
 
-        sharpe = bt_result.total_return_pct / max(abs(bt_result.total_return_pct), 1.0)
+        sharpe = bt_result.sharpe_ratio if bt_result.total_trades >= 2 else 0.0
 
         return {
             "params": params,

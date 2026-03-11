@@ -1,3 +1,4 @@
+import json
 import logging
 import sqlite3
 import threading
@@ -63,6 +64,28 @@ class TradeRepository:
                 to_strategy TEXT NOT NULL,
                 reason TEXT,
                 switched_at TEXT NOT NULL
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS strategy_parameter_state (
+                strategy TEXT NOT NULL,
+                parameter TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (strategy, parameter)
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS parameter_adjustments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy TEXT NOT NULL,
+                parameter TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT NOT NULL,
+                reason TEXT,
+                explanation TEXT DEFAULT '',
+                metric_summary TEXT DEFAULT '',
+                applied_at TEXT NOT NULL
             )
         """)
         self._conn.commit()
@@ -230,6 +253,113 @@ class TradeRepository:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_strategy_parameters(self, strategy: str) -> dict:
+        """전략별 현재 적용 파라미터를 반환한다."""
+        rows = self._conn.execute(
+            "SELECT parameter, value FROM strategy_parameter_state WHERE strategy = ?",
+            (strategy,),
+        ).fetchall()
+        return {
+            row["parameter"]: json.loads(row["value"])
+            for row in rows
+        }
+
+    def apply_parameter_adjustments(
+        self,
+        strategy: str,
+        new_params: dict,
+        reason: str,
+        metric_summary: str = "",
+        explanations: dict[str, str] | None = None,
+        previous_params: dict | None = None,
+    ) -> list[dict]:
+        """전략 파라미터 변경을 기록하고 현재 상태를 갱신한다."""
+        from datetime import datetime
+
+        explanations = explanations or {}
+        current_params = previous_params or self.get_strategy_parameters(strategy)
+        applied_at = datetime.now().isoformat()
+        changed: list[dict] = []
+
+        with self._lock:
+            for parameter, new_value in new_params.items():
+                old_value = current_params.get(parameter)
+                if old_value == new_value:
+                    continue
+
+                self._conn.execute(
+                    """
+                    INSERT INTO parameter_adjustments
+                    (strategy, parameter, old_value, new_value, reason, explanation, metric_summary, applied_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        strategy,
+                        parameter,
+                        json.dumps(old_value, ensure_ascii=False) if old_value is not None else None,
+                        json.dumps(new_value, ensure_ascii=False),
+                        reason,
+                        explanations.get(parameter, ""),
+                        metric_summary,
+                        applied_at,
+                    ),
+                )
+                self._conn.execute(
+                    """
+                    REPLACE INTO strategy_parameter_state (strategy, parameter, value, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (strategy, parameter, json.dumps(new_value, ensure_ascii=False), applied_at),
+                )
+                changed.append({
+                    "strategy": strategy,
+                    "parameter": parameter,
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "reason": reason,
+                    "explanation": explanations.get(parameter, ""),
+                    "metric_summary": metric_summary,
+                    "applied_at": applied_at,
+                })
+
+            self._conn.commit()
+
+        return changed
+
+    def get_recent_parameter_adjustments(
+        self,
+        limit: int = 10,
+        strategy: str | None = None,
+    ) -> list[dict]:
+        """최근 파라미터 조정 이력을 반환한다."""
+        if strategy:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM parameter_adjustments
+                WHERE strategy = ?
+                ORDER BY id DESC LIMIT ?
+                """,
+                (strategy, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM parameter_adjustments ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["old_value"] = json.loads(item["old_value"]) if item["old_value"] else None
+            item["new_value"] = json.loads(item["new_value"])
+            result.append(item)
+        return result
+
+    def get_latest_parameter_adjustment(self, strategy: str) -> dict | None:
+        """특정 전략의 가장 최근 파라미터 조정 1건을 반환한다."""
+        rows = self.get_recent_parameter_adjustments(limit=1, strategy=strategy)
+        return rows[0] if rows else None
 
     def close(self):
         self._conn.close()

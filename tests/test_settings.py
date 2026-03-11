@@ -18,6 +18,22 @@ def test_default_settings(monkeypatch):
     assert s.backtest_slippage_pct == 0.1
     assert s.backtest_spread_pct == 0.05
     assert s.log_file == ""
+    assert s.telegram_poll_timeout_seconds == 20
+    assert s.telegram_request_timeout_seconds == 30
+    assert s.telegram_poll_backoff_initial_seconds == 1.0
+    assert s.telegram_poll_backoff_max_seconds == 30.0
+    assert s.app_timezone == "Asia/Seoul"
+    assert s.daily_summary_hour == 9
+    assert s.daily_summary_minute == 0
+    assert s.self_improvement_day_of_week == "sun"
+    assert s.self_improvement_hour == 3
+    assert s.self_improvement_minute == 0
+    assert s.enable_auto_parameter_tuning is True
+    assert s.parameter_tuning_interval_hours == 6
+    assert s.parameter_tuning_cooldown_hours == 12
+    assert s.parameter_tuning_lookback_candles == 300
+    assert s.parameter_tuning_n_folds == 3
+    assert s.parameter_tuning_min_wf_consistency == 50.0
 
 
 def test_trade_mode_validation():

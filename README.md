@@ -10,6 +10,8 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+텔레그램 알림/명령 기능은 기본 의존성에 포함되어 있어 추가 extra 설치가 필요하지 않다.
+
 ## 환경 설정
 
 `.env.example`을 복사하여 `.env`를 생성하고 값을 채운다.
@@ -26,13 +28,19 @@ cp .env.example .env
 | `UPBIT_SECRET_KEY` | 업비트 API Secret Key | (필수) |
 | `TELEGRAM_BOT_TOKEN` | 텔레그램 봇 토큰 | (필수) |
 | `TELEGRAM_CHAT_ID` | 텔레그램 채팅 ID | (필수) |
+| `TELEGRAM_POLL_TIMEOUT_SECONDS` | 텔레그램 long polling 대기 시간 | `20` |
+| `TELEGRAM_POLL_BACKOFF_MAX_SECONDS` | 폴링 실패 시 최대 백오프 | `30.0` |
 | `TRADE_MODE` | 거래 모드 (`paper` / `live`) | `paper` |
 | `STRATEGY_NAME` | 매매 전략 | `score` |
 | `TARGET_SYMBOLS` | 대상 종목 | `KRW-BTC,KRW-ETH` |
 | `GOOGLE_API_KEY` | Gemini AI API 키 (/ask용) | (선택) |
 | `GEMINI_MODEL` | Gemini 모델명 | `gemini-2.5-flash` |
 | `ENABLE_WEB` | 웹 대시보드 활성화 | `false` |
-| `WEB_PORT` | 웹 대시보드 포트 | `8080` |
+| `WEB_PORT` | 웹 대시보드 포트 | `8090` |
+| `APP_TIMEZONE` | 스케줄러 타임존 | `Asia/Seoul` |
+| `ENABLE_AUTO_PARAMETER_TUNING` | 전략 파라미터 자동 조정 활성화 | `true` |
+| `PARAMETER_TUNING_INTERVAL_HOURS` | 파라미터 자동 조정 주기 | `6` |
+| `PARAMETER_TUNING_COOLDOWN_HOURS` | 파라미터 조정 후 재조정 대기 시간 | `12` |
 
 전체 설정 항목은 `src/cryptolight/config/settings.py`를 참고.
 
@@ -91,6 +99,8 @@ STRATEGY_NAME=ensemble python -m cryptolight.main   # 다수결 앙상블
 | 명령어 | 설명 |
 |--------|------|
 | `/info` | 시장 상태 (RSI, 국면, 매수/매도 조건) + 초보자 해설 |
+| `/criteria` | 현재 전략의 매수/매도 기준만 따로 설명 |
+| `/tuning` | 최근 자동 조정 이력과 현재 적용 파라미터 조회 |
 | `/ask <질문>` | AI에게 질문 (Gemini, 일일 10회 제한) |
 | `/status` | 봇 상태 조회 |
 | `/report` | 일일 요약 리포트 |
@@ -109,9 +119,9 @@ pip install -e ".[web]"
 
 # .env에 설정 추가
 ENABLE_WEB=true
-WEB_PORT=8080
+WEB_PORT=8090
 
-# 실행 후 브라우저에서 http://localhost:8080 접속
+# 실행 후 브라우저에서 http://localhost:8090 접속
 python -m cryptolight.main
 ```
 
@@ -137,13 +147,14 @@ python -m cryptolight.backtest --symbol KRW-BTC --strategy score --days 365 --wa
 
 ## 자기개선 루프
 
-매주 일요일 03:00 KST에 자동 실행 (`ENABLE_AUTO_OPTIMIZATION=true` 설정 시):
+기본값으로 전략 전환 루프는 매주 일요일 03:00 `APP_TIMEZONE` 기준에 실행되고, 파라미터 조정 루프는 6시간마다 실행됩니다.
 
 1. **성과 평가** — Sharpe ratio, 승률, MDD 분석
 2. **전략 경쟁** — 다중 전략 백테스트 비교 (Arena)
-3. **파라미터 최적화** — Random Search + Walk-Forward 검증
-4. **자동 전환** — Sharpe 개선폭 >= 0.5일 때 전략 교체
-5. **롤백** — 전환 후 성과 악화 시 이전 전략으로 복원
+3. **자동 전환** — 전략 전환은 주 1회만 판단해 과최적화를 줄임
+4. **자동 파라미터 조정** — 현재 전략의 기준값은 더 짧은 주기로 미세 조정
+5. **텔레그램 알림** — 무엇이 왜 바뀌었는지 초보자용 설명과 함께 전송
+6. **롤백** — 전환 후 성과 악화 시 이전 전략으로 복원
 
 ## 리스크 관리
 
@@ -204,7 +215,7 @@ src/cryptolight/
 ## 테스트
 
 ```bash
-pytest                # 전체 테스트 (142개)
+pytest                # 전체 테스트 (현재 210개)
 ruff check src/       # 린트
 ruff format src/      # 포맷
 ```
