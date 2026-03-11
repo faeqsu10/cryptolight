@@ -61,14 +61,50 @@ class TelegramBot:
         )
 
     def send_daily_summary(self, pnl_data: dict, positions_summary: str = ""):
+        trade_count = pnl_data.get("trade_count", 0)
+        total_bought = pnl_data.get("total_bought", 0)
+        total_sold = pnl_data.get("total_sold", 0)
+        total_commission = pnl_data.get("total_commission", 0)
+        realized_pnl = pnl_data.get("realized_pnl", 0)
+
         lines = ["\U0001f4ca <b>일일 요약</b>"]
-        lines.append(f"거래 수: {pnl_data.get('trade_count', 0)}건")
-        lines.append(f"매수: {pnl_data.get('total_bought', 0):,.0f} KRW")
-        lines.append(f"매도: {pnl_data.get('total_sold', 0):,.0f} KRW")
-        lines.append(f"수수료: {pnl_data.get('total_commission', 0):,.0f} KRW")
-        lines.append(f"실현 손익: {pnl_data.get('realized_pnl', 0):+,.0f} KRW")
+
+        # 거래 활동 해설
+        if trade_count == 0:
+            lines.append("오늘은 거래가 없었습니다.")
+        else:
+            lines.append(f"오늘 총 {trade_count}건의 거래가 있었습니다.")
+            if total_bought > 0:
+                lines.append(f"  \U0001f7e2 매수: {total_bought:,.0f} KRW (코인 구매에 사용한 금액)")
+            if total_sold > 0:
+                lines.append(f"  \U0001f534 매도: {total_sold:,.0f} KRW (코인 판매로 받은 금액)")
+            lines.append(f"  수수료: {total_commission:,.0f} KRW")
+
+        # 실현 손익 해설
+        if trade_count > 0:
+            pnl_emoji = "\U0001f4b0" if realized_pnl >= 0 else "\U0001f4b8"
+            lines.append(f"\n{pnl_emoji} <b>실현 손익: {realized_pnl:+,.0f} KRW</b>")
+            if total_sold == 0 and total_bought > 0:
+                lines.append("  (매수만 있어 아직 확정 수익 없음 — 수수료만 차감)")
+            elif realized_pnl > 0:
+                lines.append("  (매도 금액이 매수 금액보다 커서 수익 실현!)")
+            elif realized_pnl < 0:
+                lines.append("  (매도 금액이 매수 금액보다 작아 손실 발생)")
+            else:
+                lines.append("  (본전 수준)")
+
+        # 포지션 요약
         if positions_summary:
-            lines.append(f"\n{positions_summary}")
+            lines.append("\n\U0001f4bc <b>보유 현황</b>")
+            lines.append(f"<pre>{html.escape(positions_summary)}</pre>")
+
+            # 총 손익 해설
+            if "손익:" in positions_summary:
+                if "-" in positions_summary.split("손익:")[1].split("\n")[0]:
+                    lines.append("\n총 자산이 초기 투자금보다 적습니다. 보유 코인의 가격이 회복되면 개선될 수 있습니다.")
+                elif "+" in positions_summary.split("손익:")[1].split("\n")[0]:
+                    lines.append("\n총 자산이 초기 투자금보다 많습니다. 잘 운영되고 있습니다!")
+
         self.send_message("\n".join(lines))
 
     def send_surge_alert(self, symbol: str, price: float, change_rate: float):
