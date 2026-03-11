@@ -60,7 +60,7 @@ class TelegramBot:
             f"종목: {', '.join(symbols)}"
         )
 
-    def send_daily_summary(self, pnl_data: dict, positions_summary: str = "", trades: list | None = None):
+    def send_daily_summary(self, pnl_data: dict, positions_summary: str = "", trades: list | None = None, holdings: list | None = None, cash_krw: float = 0):
         trade_count = pnl_data.get("trade_count", 0)
         total_bought = pnl_data.get("total_bought", 0)
         total_sold = pnl_data.get("total_sold", 0)
@@ -121,18 +121,41 @@ class TelegramBot:
             else:
                 lines.append("  본전 수준입니다")
 
-        # 포지션 요약
-        if positions_summary:
-            lines.append("\n\U0001f4bc <b>보유 현황</b>")
-            lines.append(f"<pre>{html.escape(positions_summary)}</pre>")
+        # 보유 현황 (초보자 친화)
+        if holdings or cash_krw > 0:
+            lines.append("\n\U0001f4bc <b>현재 보유 현황</b>")
+            lines.append(f"  현금: {cash_krw:,.0f} KRW (언제든 사용 가능한 원화)")
 
-            # 총 손익 해설
-            if "손익:" in positions_summary:
-                pnl_part = positions_summary.split("손익:")[1].split("\n")[0]
-                if "-" in pnl_part:
-                    lines.append("총 자산이 초기 투자금보다 적습니다. 보유 코인의 가격이 회복되면 개선될 수 있습니다.")
-                elif "+" in pnl_part:
-                    lines.append("총 자산이 초기 투자금보다 많습니다. 잘 운영되고 있습니다!")
+            if holdings:
+                total_eval = 0.0
+                total_cost = 0.0
+                for h in holdings:
+                    pnl = h["pnl"]
+                    pnl_pct = ((h["current_price"] - h["avg_price"]) / h["avg_price"] * 100) if h["avg_price"] > 0 else 0
+                    pnl_emoji = "\U0001f4c8" if pnl >= 0 else "\U0001f4c9"
+                    qty_str = f"{h['quantity']:.8f}".rstrip("0").rstrip(".")
+                    lines.append(
+                        f"\n  {pnl_emoji} <b>{h['coin']}</b> ({h['symbol']})\n"
+                        f"    보유수량: {qty_str}개\n"
+                        f"    매수가: {h['avg_price']:,.0f}원 (살 때 가격)\n"
+                        f"    현재가: {h['current_price']:,.0f}원\n"
+                        f"    평가금액: {h['eval_amount']:,.0f}원\n"
+                        f"    손익: {pnl:+,.0f}원 ({pnl_pct:+.1f}%)"
+                    )
+                    total_eval += h["eval_amount"]
+                    total_cost += h["cost"]
+
+                total_asset = cash_krw + total_eval
+                lines.append(f"\n  <b>총 자산: {total_asset:,.0f} KRW</b>")
+                if total_eval > 0:
+                    total_pnl = total_eval - total_cost
+                    if total_pnl >= 0:
+                        lines.append(f"  코인 평가수익: +{total_pnl:,.0f}원 (아직 안 팔아서 확정은 아님)")
+                    else:
+                        lines.append(f"  코인 평가손실: {total_pnl:,.0f}원 (팔지 않으면 확정 손실 아님)")
+            elif cash_krw > 0:
+                lines.append("\n  현재 보유 코인 없음 — 전액 현금 상태")
+                lines.append(f"  <b>총 자산: {cash_krw:,.0f} KRW</b>")
 
         self.send_message("\n".join(lines))
 

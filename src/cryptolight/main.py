@@ -432,7 +432,23 @@ def daily_summary_job(
         # 전략별 성과 추가
         tracker = StrategyTracker(repo)
         strategy_summary = tracker.summary_text()
-        bot.send_daily_summary(pnl_data, positions_summary, today_trades)
+        # 보유 코인 상세 정보 구성
+        holdings = []
+        if isinstance(broker, PaperBroker):
+            for pos_sym, pos in broker.positions.items():
+                if pos.quantity > 0:
+                    cur_price = prices.get(pos_sym, 0)
+                    holdings.append({
+                        "symbol": pos_sym,
+                        "coin": pos_sym.split("-")[1] if "-" in pos_sym else pos_sym,
+                        "quantity": pos.quantity,
+                        "avg_price": pos.avg_price,
+                        "current_price": cur_price,
+                        "eval_amount": pos.quantity * cur_price,
+                        "cost": pos.quantity * pos.avg_price,
+                        "pnl": (cur_price - pos.avg_price) * pos.quantity,
+                    })
+        bot.send_daily_summary(pnl_data, positions_summary, today_trades, holdings, broker.balance_krw if isinstance(broker, PaperBroker) else 0)
         if strategy_summary and "데이터 없음" not in strategy_summary:
             bot.send_message(f"<b>전략별 성과</b>\n<pre>{strategy_summary}</pre>")
         logger.info("일일 요약 전송 완료")
