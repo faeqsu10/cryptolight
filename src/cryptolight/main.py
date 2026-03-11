@@ -415,11 +415,24 @@ def daily_summary_job(
             for symbol in symbols:
                 ticker = client.get_ticker(symbol)
                 prices[symbol] = ticker.price
+            # 보유 중이지만 symbols에 없는 종목도 가격 조회
+            for pos_symbol, pos in broker.positions.items():
+                if pos.quantity > 0 and pos_symbol not in prices:
+                    try:
+                        pos_ticker = client.get_ticker(pos_symbol)
+                        prices[pos_symbol] = pos_ticker.price
+                    except Exception:
+                        pass
             positions_summary = broker.summary_text(prices)
+        # 오늘 거래 내역 조회
+        today_trades = repo.get_trades(limit=50)
+        from datetime import datetime
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_trades = [t for t in today_trades if t.timestamp.startswith(today_str)]
         # 전략별 성과 추가
         tracker = StrategyTracker(repo)
         strategy_summary = tracker.summary_text()
-        bot.send_daily_summary(pnl_data, positions_summary)
+        bot.send_daily_summary(pnl_data, positions_summary, today_trades)
         if strategy_summary and "데이터 없음" not in strategy_summary:
             bot.send_message(f"<b>전략별 성과</b>\n<pre>{strategy_summary}</pre>")
         logger.info("일일 요약 전송 완료")

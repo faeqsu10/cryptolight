@@ -60,7 +60,7 @@ class TelegramBot:
             f"종목: {', '.join(symbols)}"
         )
 
-    def send_daily_summary(self, pnl_data: dict, positions_summary: str = ""):
+    def send_daily_summary(self, pnl_data: dict, positions_summary: str = "", trades: list | None = None):
         trade_count = pnl_data.get("trade_count", 0)
         total_bought = pnl_data.get("total_bought", 0)
         total_sold = pnl_data.get("total_sold", 0)
@@ -75,23 +75,51 @@ class TelegramBot:
         else:
             lines.append(f"오늘 총 {trade_count}건의 거래가 있었습니다.")
             if total_bought > 0:
-                lines.append(f"  \U0001f7e2 매수: {total_bought:,.0f} KRW (코인 구매에 사용한 금액)")
+                lines.append(f"  \U0001f7e2 매수(구매): {total_bought:,.0f} KRW")
             if total_sold > 0:
-                lines.append(f"  \U0001f534 매도: {total_sold:,.0f} KRW (코인 판매로 받은 금액)")
+                lines.append(f"  \U0001f534 매도(판매): {total_sold:,.0f} KRW")
             lines.append(f"  수수료: {total_commission:,.0f} KRW")
+
+        # 거래 상세 내역
+        if trades:
+            lines.append("\n\U0001f4dd <b>거래 내역</b>")
+            for t in reversed(trades):  # 시간순 정렬
+                coin = t.symbol.split("-")[1] if "-" in t.symbol else t.symbol
+                time_str = t.timestamp[11:16] if len(t.timestamp) > 16 else ""
+                qty_str = f"{t.quantity:.8f}".rstrip("0").rstrip(".")
+                if t.side == "buy":
+                    lines.append(
+                        f"  \U0001f7e2 {time_str} <b>{coin}</b> 매수\n"
+                        f"    {t.amount_krw:,.0f}원으로 {qty_str}개 구매 (개당 {t.price:,.0f}원)"
+                    )
+                else:
+                    lines.append(
+                        f"  \U0001f534 {time_str} <b>{coin}</b> 매도\n"
+                        f"    {qty_str}개 판매 → {t.amount_krw:,.0f}원 수령 (개당 {t.price:,.0f}원)"
+                    )
+                if t.reason:
+                    lines.append(f"    사유: {html.escape(t.reason)}")
+
+        # 용어 안내
+        if trade_count > 0:
+            lines.append(
+                "\n<i>매수 = 코인을 원화로 사는 것\n"
+                "매도 = 보유 코인을 팔아 원화로 바꾸는 것\n"
+                "수수료 = 거래소에 내는 거래 비용 (0.05%)</i>"
+            )
 
         # 실현 손익 해설
         if trade_count > 0:
             pnl_emoji = "\U0001f4b0" if realized_pnl >= 0 else "\U0001f4b8"
             lines.append(f"\n{pnl_emoji} <b>실현 손익: {realized_pnl:+,.0f} KRW</b>")
             if total_sold == 0 and total_bought > 0:
-                lines.append("  (매수만 있어 아직 확정 수익 없음 — 수수료만 차감)")
+                lines.append("  아직 팔지 않아서 확정 수익은 없습니다 (수수료만 차감)")
             elif realized_pnl > 0:
-                lines.append("  (매도 금액이 매수 금액보다 커서 수익 실현!)")
+                lines.append("  판 금액이 산 금액보다 커서 수익이 났습니다!")
             elif realized_pnl < 0:
-                lines.append("  (매도 금액이 매수 금액보다 작아 손실 발생)")
+                lines.append("  판 금액이 산 금액보다 작아 손실이 발생했습니다")
             else:
-                lines.append("  (본전 수준)")
+                lines.append("  본전 수준입니다")
 
         # 포지션 요약
         if positions_summary:
@@ -100,10 +128,11 @@ class TelegramBot:
 
             # 총 손익 해설
             if "손익:" in positions_summary:
-                if "-" in positions_summary.split("손익:")[1].split("\n")[0]:
-                    lines.append("\n총 자산이 초기 투자금보다 적습니다. 보유 코인의 가격이 회복되면 개선될 수 있습니다.")
-                elif "+" in positions_summary.split("손익:")[1].split("\n")[0]:
-                    lines.append("\n총 자산이 초기 투자금보다 많습니다. 잘 운영되고 있습니다!")
+                pnl_part = positions_summary.split("손익:")[1].split("\n")[0]
+                if "-" in pnl_part:
+                    lines.append("총 자산이 초기 투자금보다 적습니다. 보유 코인의 가격이 회복되면 개선될 수 있습니다.")
+                elif "+" in pnl_part:
+                    lines.append("총 자산이 초기 투자금보다 많습니다. 잘 운영되고 있습니다!")
 
         self.send_message("\n".join(lines))
 
