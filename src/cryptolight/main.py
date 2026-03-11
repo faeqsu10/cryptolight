@@ -234,26 +234,53 @@ def run_strategy(
                 if _cooldown:
                     _cooldown.record_trade(symbol)
                 logger.info("매수 체결: %s %s KRW [%s]", symbol, f"{order_amount:,.0f}", settings.trade_mode)
+                if bot:
+                    coin_name = symbol.split("-")[1]
+                    qty_str = f"{order.quantity:.8f}".rstrip("0").rstrip(".")
+                    bot.send_message(
+                        f"\U0001f7e2 <b>매수 체결</b>\n"
+                        f"종목: {symbol} ({coin_name})\n"
+                        f"매수금액: {order_amount:,.0f} KRW\n"
+                        f"체결가격: {ticker.price:,.0f} KRW\n"
+                        f"매수수량: {qty_str}개\n"
+                        f"사유: {signal_result.reason}"
+                    )
 
         elif broker and signal_result.action == "sell":
+            _sell_qty = 0.0
+            _sell_order = None
             if isinstance(broker, PaperBroker):
                 pos = broker.positions.get(symbol)
                 if pos and pos.quantity > 0:
-                    order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
-                    if order:
+                    _sell_qty = pos.quantity
+                    _sell_order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
+                    if _sell_order:
                         logger.info("매도 체결: %s %.8f [%s]", symbol, pos.quantity, settings.trade_mode)
                 else:
                     logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
             elif isinstance(broker, LiveBroker):
-                # 실거래: 잔고에서 수량 조회
                 currency = symbol.split("-")[1]
                 balance = client.get_balance(currency)
                 if balance and balance.available > 0:
-                    order = broker.sell_market(symbol, balance.available, ticker.price, reason=signal_result.reason, strategy=strategy_name)
-                    if order:
+                    _sell_qty = balance.available
+                    _sell_order = broker.sell_market(symbol, balance.available, ticker.price, reason=signal_result.reason, strategy=strategy_name)
+                    if _sell_order:
                         logger.info("매도 체결: %s %.8f [live]", symbol, balance.available)
                 else:
                     logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
+
+            if _sell_order and bot:
+                coin_name = symbol.split("-")[1]
+                qty_str = f"{_sell_qty:.8f}".rstrip("0").rstrip(".")
+                proceeds = _sell_qty * ticker.price
+                bot.send_message(
+                    f"\U0001f534 <b>매도 체결</b>\n"
+                    f"종목: {symbol} ({coin_name})\n"
+                    f"매도금액: {proceeds:,.0f} KRW\n"
+                    f"체결가격: {ticker.price:,.0f} KRW\n"
+                    f"매도수량: {qty_str}개\n"
+                    f"사유: {signal_result.reason}"
+                )
 
         # 시장 상태 수집 (텔레그램 요약용)
         _market_snapshots[symbol] = {
