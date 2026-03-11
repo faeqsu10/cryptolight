@@ -47,6 +47,45 @@ _cmd_handler: CommandHandler | None = None
 _active_strategy_name: str = ""  # HIGH-1: mutable 전략명 (자기개선 루프에서 전환)
 
 
+def _explain_indicators(indicators: dict) -> str:
+    """지표값을 초보자 친화적 해설로 변환한다."""
+    lines = []
+    rsi = indicators.get("rsi")
+    if rsi is not None:
+        if rsi <= 30:
+            desc = "과매도 — 많이 떨어져서 반등 가능성"
+        elif rsi <= 40:
+            desc = "약간 저평가 — 살 만한 구간"
+        elif rsi >= 70:
+            desc = "과매수 — 많이 올라서 하락 주의"
+        elif rsi >= 60:
+            desc = "약간 고평가 — 추가 매수 주의"
+        else:
+            desc = "중립 — 뚜렷한 방향 없음"
+        lines.append(f"  RSI {rsi:.1f}: {desc}")
+
+    macd = indicators.get("macd")
+    macd_signal = indicators.get("macd_signal")
+    if macd is not None and macd_signal is not None:
+        if macd > macd_signal:
+            desc = "상승 추세 — 매수 힘이 강함"
+        else:
+            desc = "하락 추세 — 매도 힘이 강함"
+        lines.append(f"  MACD: {desc}")
+
+    bb_pct = indicators.get("bb_position")
+    if bb_pct is not None:
+        if bb_pct <= 0.2:
+            desc = "밴드 하단 — 저점 근처"
+        elif bb_pct >= 0.8:
+            desc = "밴드 상단 — 고점 근처"
+        else:
+            desc = "밴드 중간 — 보통 구간"
+        lines.append(f"  볼린저: {desc}")
+
+    return "\n".join(lines)
+
+
 def run_strategy(
     client: UpbitClient,
     bot: TelegramBot | None,
@@ -237,13 +276,15 @@ def run_strategy(
                 if bot:
                     coin_name = symbol.split("-")[1]
                     qty_str = f"{order.quantity:.8f}".rstrip("0").rstrip(".")
+                    explain = _explain_indicators(signal_result.indicators)
                     bot.send_message(
                         f"\U0001f7e2 <b>매수 체결</b>\n"
                         f"종목: {symbol} ({coin_name})\n"
                         f"매수금액: {order_amount:,.0f} KRW\n"
                         f"체결가격: {ticker.price:,.0f} KRW\n"
                         f"매수수량: {qty_str}개\n"
-                        f"사유: {signal_result.reason}"
+                        f"사유: {signal_result.reason}\n"
+                        f"\n<b>지표 해설</b>\n<pre>{html_mod.escape(explain)}</pre>"
                     )
 
         elif broker and signal_result.action == "sell":
@@ -273,13 +314,15 @@ def run_strategy(
                 coin_name = symbol.split("-")[1]
                 qty_str = f"{_sell_qty:.8f}".rstrip("0").rstrip(".")
                 proceeds = _sell_qty * ticker.price
+                explain = _explain_indicators(signal_result.indicators)
                 bot.send_message(
                     f"\U0001f534 <b>매도 체결</b>\n"
                     f"종목: {symbol} ({coin_name})\n"
                     f"매도금액: {proceeds:,.0f} KRW\n"
                     f"체결가격: {ticker.price:,.0f} KRW\n"
                     f"매도수량: {qty_str}개\n"
-                    f"사유: {signal_result.reason}"
+                    f"사유: {signal_result.reason}\n"
+                    f"\n<b>지표 해설</b>\n<pre>{html_mod.escape(explain)}</pre>"
                 )
 
         # 시장 상태 수집 (텔레그램 요약용)
