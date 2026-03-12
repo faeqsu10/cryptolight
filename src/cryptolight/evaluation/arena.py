@@ -22,11 +22,15 @@ class StrategyArena:
         order_amount: float = 50_000,
         min_wf_consistency: float = 50.0,
         n_folds: int = 3,
+        slippage_pct: float = 0.0,
+        spread_pct: float = 0.0,
     ):
         self.initial_balance = initial_balance
         self.order_amount = order_amount
         self.min_wf_consistency = min_wf_consistency
         self.n_folds = n_folds
+        self.slippage_pct = slippage_pct
+        self.spread_pct = spread_pct
 
     def compete(
         self,
@@ -83,6 +87,8 @@ class StrategyArena:
             strategy=strategy,
             initial_balance=self.initial_balance,
             order_amount=self.order_amount,
+            slippage_pct=self.slippage_pct,
+            spread_pct=self.spread_pct,
         )
         bt_result = engine.run(candles)
 
@@ -91,6 +97,8 @@ class StrategyArena:
             strategy=create_strategy(name, **params),
             initial_balance=self.initial_balance,
             order_amount=self.order_amount,
+            slippage_pct=self.slippage_pct,
+            spread_pct=self.spread_pct,
         )
         wf_result = wf_validator.run(candles, n_folds=self.n_folds)
 

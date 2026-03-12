@@ -9,3 +9,10 @@ services:
       - ./data:/app/data
     environment:
       - TZ=Asia/Seoul
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

@@ -18,6 +18,7 @@ class TradeRepository:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         self._create_tables()
@@ -103,15 +104,16 @@ class TradeRepository:
         return cursor.lastrowid
 
     def get_trades(self, symbol: str | None = None, limit: int = 50) -> list[TradeRecord]:
-        if symbol:
-            rows = self._conn.execute(
-                "SELECT * FROM trades WHERE symbol = ? ORDER BY id DESC LIMIT ?",
-                (symbol, limit),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+        with self._lock:
+            if symbol:
+                rows = self._conn.execute(
+                    "SELECT * FROM trades WHERE symbol = ? ORDER BY id DESC LIMIT ?",
+                    (symbol, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
+                ).fetchall()
         return [TradeRecord(**dict(row)) for row in rows]
 
     def get_daily_pnl(self, date: str | None = None) -> dict:
@@ -120,10 +122,11 @@ class TradeRepository:
             from datetime import datetime
             date = datetime.now().strftime("%Y-%m-%d")
 
-        rows = self._conn.execute(
-            "SELECT * FROM trades WHERE timestamp LIKE ? ORDER BY id",
-            (f"{date}%",),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM trades WHERE timestamp LIKE ? ORDER BY id",
+                (f"{date}%",),
+            ).fetchall()
 
         total_bought = 0.0
         total_sold = 0.0
@@ -171,8 +174,12 @@ class TradeRepository:
 
     def load_positions(self) -> tuple[dict, float | None]:
         """DB에서 포지션과 잔고를 로드한다. 없으면 ({}, None) 반환."""
+        with self._lock:
+            rows = self._conn.execute("SELECT symbol, quantity, avg_price, total_cost FROM positions").fetchall()
+            balance_row = self._conn.execute(
+                "SELECT value FROM paper_state WHERE key = ?", ("balance_krw",)
+            ).fetchone()
         positions: dict = {}
-        rows = self._conn.execute("SELECT symbol, quantity, avg_price, total_cost FROM positions").fetchall()
         for row in rows:
             positions[row["symbol"]] = {
                 "symbol": row["symbol"],
@@ -180,58 +187,57 @@ class TradeRepository:
                 "avg_price": row["avg_price"],
                 "total_cost": row["total_cost"],
             }
-
-        balance_row = self._conn.execute(
-            "SELECT value FROM paper_state WHERE key = ?", ("balance_krw",)
-        ).fetchone()
         balance_krw = balance_row["value"] if balance_row else None
 
         return positions, balance_krw
 
     def get_strategy_aggregates(self) -> list[dict]:
         """전략별 집계 통계를 반환한다."""
-        rows = self._conn.execute("""
-            SELECT
-                strategy,
-                COUNT(*) as trade_count,
-                SUM(CASE WHEN side='buy' THEN amount_krw ELSE 0 END) as total_bought,
-                SUM(CASE WHEN side='sell' THEN amount_krw ELSE 0 END) as total_sold,
-                SUM(commission) as total_commission
-            FROM trades
-            WHERE strategy != '' AND strategy IS NOT NULL
-            GROUP BY strategy
-            ORDER BY trade_count DESC
-        """).fetchall()
+        with self._lock:
+            rows = self._conn.execute("""
+                SELECT
+                    strategy,
+                    COUNT(*) as trade_count,
+                    SUM(CASE WHEN side='buy' THEN amount_krw ELSE 0 END) as total_bought,
+                    SUM(CASE WHEN side='sell' THEN amount_krw ELSE 0 END) as total_sold,
+                    SUM(commission) as total_commission
+                FROM trades
+                WHERE strategy != '' AND strategy IS NOT NULL
+                GROUP BY strategy
+                ORDER BY trade_count DESC
+            """).fetchall()
         return [dict(row) for row in rows]
 
     def get_strategy_sell_pairs(self, strategy: str) -> list[dict]:
         """특정 전략의 매도 건별 직전 매수 가격을 반환한다."""
-        rows = self._conn.execute("""
-            SELECT t1.price as sell_price,
-                   (SELECT t2.price FROM trades t2
-                    WHERE t2.symbol = t1.symbol
-                      AND t2.side = 'buy'
-                      AND t2.id < t1.id
-                      AND t2.strategy = t1.strategy
-                    ORDER BY t2.id DESC LIMIT 1) as buy_price
-            FROM trades t1
-            WHERE t1.side = 'sell' AND t1.strategy = ?
-            ORDER BY t1.id
-        """, (strategy,)).fetchall()
+        with self._lock:
+            rows = self._conn.execute("""
+                SELECT t1.price as sell_price,
+                       (SELECT t2.price FROM trades t2
+                        WHERE t2.symbol = t1.symbol
+                          AND t2.side = 'buy'
+                          AND t2.id < t1.id
+                          AND t2.strategy = t1.strategy
+                        ORDER BY t2.id DESC LIMIT 1) as buy_price
+                FROM trades t1
+                WHERE t1.side = 'sell' AND t1.strategy = ?
+                ORDER BY t1.id
+            """, (strategy,)).fetchall()
         return [dict(row) for row in rows]
 
     def get_strategy_trades(self, strategy: str, since: str = "") -> list[dict]:
         """특정 전략의 거래 내역을 반환한다. since: YYYY-MM-DD 이후."""
-        if since:
-            rows = self._conn.execute(
-                "SELECT * FROM trades WHERE strategy = ? AND timestamp >= ? ORDER BY id",
-                (strategy, since),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM trades WHERE strategy = ? ORDER BY id",
-                (strategy,),
-            ).fetchall()
+        with self._lock:
+            if since:
+                rows = self._conn.execute(
+                    "SELECT * FROM trades WHERE strategy = ? AND timestamp >= ? ORDER BY id",
+                    (strategy, since),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM trades WHERE strategy = ? ORDER BY id",
+                    (strategy,),
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def record_strategy_switch(
@@ -248,18 +254,20 @@ class TradeRepository:
 
     def get_strategy_switches(self, limit: int = 10) -> list[dict]:
         """최근 전략 전환 이력을 반환한다."""
-        rows = self._conn.execute(
-            "SELECT * FROM strategy_switches ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM strategy_switches ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def get_strategy_parameters(self, strategy: str) -> dict:
         """전략별 현재 적용 파라미터를 반환한다."""
-        rows = self._conn.execute(
-            "SELECT parameter, value FROM strategy_parameter_state WHERE strategy = ?",
-            (strategy,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT parameter, value FROM strategy_parameter_state WHERE strategy = ?",
+                (strategy,),
+            ).fetchall()
         return {
             row["parameter"]: json.loads(row["value"])
             for row in rows
@@ -333,20 +341,21 @@ class TradeRepository:
         strategy: str | None = None,
     ) -> list[dict]:
         """최근 파라미터 조정 이력을 반환한다."""
-        if strategy:
-            rows = self._conn.execute(
-                """
-                SELECT * FROM parameter_adjustments
-                WHERE strategy = ?
-                ORDER BY id DESC LIMIT ?
-                """,
-                (strategy, limit),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM parameter_adjustments ORDER BY id DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+        with self._lock:
+            if strategy:
+                rows = self._conn.execute(
+                    """
+                    SELECT * FROM parameter_adjustments
+                    WHERE strategy = ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (strategy, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM parameter_adjustments ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
 
         result = []
         for row in rows:

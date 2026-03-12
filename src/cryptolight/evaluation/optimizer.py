@@ -77,6 +77,8 @@ class ParameterOptimizer:
         min_wf_consistency: float = 50.0,
         max_overfit_ratio: float = 3.0,
         min_trades_per_fold: int = 3,
+        slippage_pct: float = 0.0,
+        spread_pct: float = 0.0,
     ):
         self.initial_balance = initial_balance
         self.order_amount = order_amount
@@ -84,6 +86,8 @@ class ParameterOptimizer:
         self.min_wf_consistency = min_wf_consistency
         self.max_overfit_ratio = max_overfit_ratio
         self.min_trades_per_fold = min_trades_per_fold
+        self.slippage_pct = slippage_pct
+        self.spread_pct = spread_pct
 
     def optimize(
         self,
@@ -169,6 +173,8 @@ class ParameterOptimizer:
             strategy=create_strategy(strategy_name, **params),
             initial_balance=self.initial_balance,
             order_amount=self.order_amount,
+            slippage_pct=self.slippage_pct,
+            spread_pct=self.spread_pct,
         )
         bt_result = engine.run(candles)
 
@@ -180,6 +186,8 @@ class ParameterOptimizer:
             strategy=create_strategy(strategy_name, **params),
             initial_balance=self.initial_balance,
             order_amount=self.order_amount,
+            slippage_pct=self.slippage_pct,
+            spread_pct=self.spread_pct,
         )
         wf_result = wf_validator.run(candles, n_folds=self.n_folds)
 

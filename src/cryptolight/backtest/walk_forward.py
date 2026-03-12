@@ -69,27 +69,42 @@ class WalkForwardValidator:
         self.train_ratio = train_ratio
 
     def run(self, candles: list[Candle], n_folds: int = 5) -> WalkForwardResult:
-        """N개 구간으로 Walk-Forward Validation 실행."""
+        """N개 구간으로 Anchored Walk-Forward Validation 실행.
+
+        시간 순서를 보존한다: fold k의 학습 구간은 항상 시계열 시작부터이며
+        검증 구간은 학습 구간 이후 구간이다.
+
+        fold 0: train=[0:train_size],                  test=[train_size:train_size+test_size]
+        fold 1: train=[0:train_size+test_size],        test=[train_size+test_size:train_size+2*test_size]
+        fold k: train=[0:train_size+k*test_size],      test=[train_size+k*test_size:train_size+(k+1)*test_size]
+        """
         if n_folds < 2:
             raise ValueError("n_folds must be >= 2 for walk-forward validation")
         total = len(candles)
-        fold_size = total // n_folds
+        min_required = self.strategy.required_candle_count()
 
-        if fold_size < self.strategy.required_candle_count() * 2:
-            logger.warning("캔들 부족: fold당 %d개 (최소 %d 필요)", fold_size, self.strategy.required_candle_count() * 2)
+        # 전체 데이터를 train_ratio 비율로 초기 학습 구간과 검증 풀로 나눈다
+        initial_train_size = int(total * self.train_ratio)
+        test_pool = total - initial_train_size
+        test_size = test_pool // n_folds
+
+        if initial_train_size < min_required or test_size < min_required:
+            logger.warning(
+                "캔들 부족: 초기학습 %d개, 검증구간 %d개 (최소 %d 필요)",
+                initial_train_size, test_size, min_required,
+            )
             return WalkForwardResult()
 
         folds = []
         for i in range(n_folds):
-            start = i * fold_size
-            end = min(start + fold_size, total)
-            fold_candles = candles[start:end]
+            train_end = initial_train_size + i * test_size
+            test_start = train_end
+            test_end = min(test_start + test_size, total)
 
-            split = int(len(fold_candles) * self.train_ratio)
-            in_sample = fold_candles[:split]
-            out_sample = fold_candles[split:]
+            in_sample = candles[:train_end]
+            out_sample = candles[test_start:test_end]
 
-            if len(in_sample) < self.strategy.required_candle_count() or len(out_sample) < self.strategy.required_candle_count():
+            if len(in_sample) < min_required or len(out_sample) < min_required:
                 continue
 
             fold_strategy = copy.deepcopy(self.strategy)
