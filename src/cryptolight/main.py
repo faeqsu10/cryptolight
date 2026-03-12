@@ -366,13 +366,15 @@ def run_strategy(
             signal_result.confidence * 100, signal_result.indicators.get("rsi", "N/A"),
         )
 
-        # 중복 시그널 방지 (스레드 안전)
+        # 중복 시그널 방지 (스레드 안전) — 실행 전에는 읽기만, 업데이트는 주문 성공 후
         with _signal_lock:
             prev = _last_signals.get(symbol)
-            if prev == signal_result.action:
+            if prev == signal_result.action and signal_result.action != "hold":
                 logger.info("중복 시그널 스킵: %s → %s", symbol, signal_result.action)
                 continue
-            _last_signals[symbol] = signal_result.action
+            # hold 시그널이면 이전 기록을 지워 다음 buy/sell 허용
+            if signal_result.action == "hold":
+                _last_signals.pop(symbol, None)
 
         # 매수 실행
         if broker and signal_result.action == "buy":
@@ -445,6 +447,8 @@ def run_strategy(
 
             order = broker.buy_market(symbol, order_amount, ticker.price, reason=signal_result.reason, strategy=strategy_name)
             if order:
+                with _signal_lock:
+                    _last_signals[symbol] = "buy"
                 if _cooldown:
                     _cooldown.record_trade(symbol)
                 logger.info("매수 체결: %s %s KRW [%s]", symbol, f"{order_amount:,.0f}", settings.trade_mode)
@@ -485,6 +489,9 @@ def run_strategy(
                 else:
                     logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
 
+            if _sell_order:
+                with _signal_lock:
+                    _last_signals[symbol] = "sell"
             if _sell_order and bot:
                 coin_name = symbol.split("-")[1]
                 qty_str = f"{_sell_qty:.8f}".rstrip("0").rstrip(".")
@@ -657,6 +664,8 @@ def self_improvement_job(
             initial_balance=settings.paper_initial_balance,
             order_amount=settings.max_order_amount_krw,
             n_folds=3,
+            slippage_pct=settings.backtest_slippage_pct,
+            spread_pct=settings.backtest_spread_pct,
         )
         arena_results = arena.compete(candles)
         arena_text = arena.summary_text(arena_results)
@@ -1094,6 +1103,8 @@ def _run_parameter_tuning(
         order_amount=settings.max_order_amount_krw,
         n_folds=settings.parameter_tuning_n_folds,
         min_wf_consistency=settings.parameter_tuning_min_wf_consistency,
+        slippage_pct=settings.backtest_slippage_pct,
+        spread_pct=settings.backtest_spread_pct,
     )
 
     current_strategy = _build_strategy_instance(settings, strategy_name)

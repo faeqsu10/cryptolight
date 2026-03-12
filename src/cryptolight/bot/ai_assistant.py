@@ -66,7 +66,7 @@ class AIAssistant:
         try:
             resp = self._client.post(
                 f"{GEMINI_API_BASE}/{self._model}:generateContent",
-                params={"key": self._api_key},
+                headers={"x-goog-api-key": self._api_key},
                 json={
                     "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
                     "contents": [{"parts": [{"text": user_content}]}],

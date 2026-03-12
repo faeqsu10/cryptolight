@@ -88,43 +88,57 @@ class ScoreBasedStrategy(BaseStrategy):
     def _get_weights(self) -> dict:
         return REGIME_WEIGHTS.get(self._regime, DEFAULT_WEIGHTS)
 
-    def _calc_rsi_scores(self, closes: list[float]) -> tuple[float, float, dict]:
-        """RSI 관련 매수/매도 점수 계산. (buy_score, sell_score, indicators)"""
+    def _calc_rsi_scores(
+        self, closes: list[float]
+    ) -> tuple[float, float, float, float, dict]:
+        """RSI 관련 매수/매도 점수 계산.
+
+        Returns:
+            (rsi_base_buy, rsi_base_sell, rsi_dir_buy, rsi_dir_sell, indicators)
+        """
         rsi = calculate_rsi(closes, self.rsi_period)
         prev_rsi = calculate_rsi(closes[:-1], self.rsi_period)
 
         if rsi is None:
-            return 0, 0, {}
+            return 0.0, 0.0, 0.0, 0.0, {}
 
-        buy_score = 0.0
-        sell_score = 0.0
+        rsi_base_buy = 0.0
+        rsi_base_sell = 0.0
+        rsi_dir_buy = 0.0
+        rsi_dir_sell = 0.0
 
         # RSI 과매도/과매수
         if rsi <= self.rsi_oversold:
-            buy_score += BASE_SCORES["rsi"]
+            rsi_base_buy = BASE_SCORES["rsi"]
         if rsi >= self.rsi_overbought:
-            sell_score += BASE_SCORES["rsi"]
+            rsi_base_sell = BASE_SCORES["rsi"]
 
         # RSI 방향성
         if prev_rsi is not None:
             if rsi > prev_rsi:  # 반등 시작
-                buy_score += BASE_SCORES["rsi_dir"]
+                rsi_dir_buy = BASE_SCORES["rsi_dir"]
             if rsi < prev_rsi:  # 하락 시작
-                sell_score += BASE_SCORES["rsi_dir"]
+                rsi_dir_sell = BASE_SCORES["rsi_dir"]
 
         indicators = {"rsi": round(rsi, 2)}
         if prev_rsi is not None:
             indicators["prev_rsi"] = round(prev_rsi, 2)
 
-        return buy_score, sell_score, indicators
+        return rsi_base_buy, rsi_base_sell, rsi_dir_buy, rsi_dir_sell, indicators
 
-    def _calc_macd_scores(self, closes: list[float]) -> tuple[float, float, dict]:
-        """MACD 관련 매수/매도 점수 계산."""
+    def _calc_macd_scores(
+        self, closes: list[float]
+    ) -> tuple[float, float, float, float, dict]:
+        """MACD 관련 매수/매도 점수 계산.
+
+        Returns:
+            (macd_base_buy, macd_base_sell, macd_hist_buy, macd_hist_sell, indicators)
+        """
         ema_fast = calculate_ema(closes, self.macd_fast)
         ema_slow = calculate_ema(closes, self.macd_slow)
 
         if len(ema_slow) < 2:
-            return 0, 0, {}
+            return 0.0, 0.0, 0.0, 0.0, {}
 
         offset = len(ema_fast) - len(ema_slow)
         ema_fast_aligned = ema_fast[offset:]
@@ -132,7 +146,7 @@ class ScoreBasedStrategy(BaseStrategy):
         signal_line = calculate_ema(macd_line, self.macd_signal)
 
         if len(signal_line) < 2:
-            return 0, 0, {}
+            return 0.0, 0.0, 0.0, 0.0, {}
 
         macd_aligned = macd_line[len(macd_line) - len(signal_line):]
         histogram = [m - s for m, s in zip(macd_aligned, signal_line)]
@@ -142,27 +156,29 @@ class ScoreBasedStrategy(BaseStrategy):
         hist = histogram[-1]
         prev_hist = histogram[-2] if len(histogram) >= 2 else 0
 
-        buy_score = 0.0
-        sell_score = 0.0
+        macd_base_buy = 0.0
+        macd_base_sell = 0.0
+        macd_hist_buy = 0.0
+        macd_hist_sell = 0.0
 
         # MACD vs Signal
         if macd > signal_val:
-            buy_score += BASE_SCORES["macd"]
+            macd_base_buy = BASE_SCORES["macd"]
         if macd < signal_val:
-            sell_score += BASE_SCORES["macd"]
+            macd_base_sell = BASE_SCORES["macd"]
 
         # 히스토그램 모멘텀
         if hist > prev_hist:
-            buy_score += BASE_SCORES["macd_hist"]
+            macd_hist_buy = BASE_SCORES["macd_hist"]
         if hist < prev_hist:
-            sell_score += BASE_SCORES["macd_hist"]
+            macd_hist_sell = BASE_SCORES["macd_hist"]
 
         indicators = {
             "macd": round(macd, 2),
             "macd_signal": round(signal_val, 2),
             "histogram": round(hist, 2),
         }
-        return buy_score, sell_score, indicators
+        return macd_base_buy, macd_base_sell, macd_hist_buy, macd_hist_sell, indicators
 
     def _calc_bb_scores(self, closes: list[float]) -> tuple[float, float, dict]:
         """볼린저밴드 관련 매수/매도 점수 계산."""
@@ -221,32 +237,34 @@ class ScoreBasedStrategy(BaseStrategy):
         closes = [c.close for c in candles]
         weights = self._get_weights()
 
-        # 각 지표별 점수 계산
-        rsi_buy, rsi_sell, rsi_ind = self._calc_rsi_scores(closes)
-        macd_buy, macd_sell, macd_ind = self._calc_macd_scores(closes)
+        # 각 지표별 점수 계산 (RSI/MACD는 기본+방향성 분리)
+        rsi_base_buy, rsi_base_sell, rsi_dir_buy, rsi_dir_sell, rsi_ind = self._calc_rsi_scores(closes)
+        macd_base_buy, macd_base_sell, macd_hist_buy, macd_hist_sell, macd_ind = self._calc_macd_scores(closes)
         bb_buy, bb_sell, bb_ind = self._calc_bb_scores(closes)
         vol_buy, vol_sell, vol_ind = self._calc_volume_scores(candles)
 
-        # 국면별 가중치 적용
+        # 6개 가중치 독립 적용
         buy_score = (
-            rsi_buy * weights["rsi"]
-            + (rsi_buy / BASE_SCORES["rsi"] * BASE_SCORES["rsi_dir"] if rsi_buy > 0 else 0) * (weights["rsi_dir"] - weights["rsi"])  # rsi_dir 보정
-            + macd_buy * weights["macd"]
-            + vol_buy * weights["volume"]
+            rsi_base_buy * weights["rsi"]
+            + rsi_dir_buy * weights["rsi_dir"]
+            + macd_base_buy * weights["macd"]
+            + macd_hist_buy * weights["macd_hist"]
             + bb_buy * weights["bb"]
+            + vol_buy * weights["volume"]
         )
 
         sell_score = (
-            rsi_sell * weights["rsi"]
-            + (rsi_sell / BASE_SCORES["rsi"] * BASE_SCORES["rsi_dir"] if rsi_sell > 0 else 0) * (weights["rsi_dir"] - weights["rsi"])
-            + macd_sell * weights["macd"]
-            + vol_sell * weights["volume"]
+            rsi_base_sell * weights["rsi"]
+            + rsi_dir_sell * weights["rsi_dir"]
+            + macd_base_sell * weights["macd"]
+            + macd_hist_sell * weights["macd_hist"]
             + bb_sell * weights["bb"]
+            + vol_sell * weights["volume"]
         )
 
-        # 정확한 점수: 각 팩터별 개별 점수를 합산
-        raw_buy = rsi_buy + macd_buy + bb_buy + vol_buy
-        raw_sell = rsi_sell + macd_sell + bb_sell + vol_sell
+        # 원점수: 가중치 미적용 합산 (indicators 표시용)
+        raw_buy = rsi_base_buy + rsi_dir_buy + macd_base_buy + macd_hist_buy + bb_buy + vol_buy
+        raw_sell = rsi_base_sell + rsi_dir_sell + macd_base_sell + macd_hist_sell + bb_sell + vol_sell
 
         # 가중치 적용 후 정규화 (최대 100점 기준)
         max_weighted = sum(
@@ -272,9 +290,9 @@ class ScoreBasedStrategy(BaseStrategy):
             confidence = round(min(buy_normalized / 100, 1.0), 2)
             # 어떤 지표가 활성화됐는지 설명
             factors = []
-            if rsi_buy > 0:
+            if rsi_base_buy > 0:
                 factors.append(f"RSI {rsi_ind.get('rsi', '?')}")
-            if macd_buy > 0:
+            if macd_base_buy > 0 or macd_hist_buy > 0:
                 factors.append("MACD 상승")
             if bb_buy > 0:
                 factors.append("BB 하단")
@@ -293,9 +311,9 @@ class ScoreBasedStrategy(BaseStrategy):
         if sell_normalized >= sell_threshold and sell_normalized > buy_normalized:
             confidence = round(min(sell_normalized / 100, 1.0), 2)
             factors = []
-            if rsi_sell > 0:
+            if rsi_base_sell > 0:
                 factors.append(f"RSI {rsi_ind.get('rsi', '?')}")
-            if macd_sell > 0:
+            if macd_base_sell > 0 or macd_hist_sell > 0:
                 factors.append("MACD 하락")
             if bb_sell > 0:
                 factors.append("BB 상단")

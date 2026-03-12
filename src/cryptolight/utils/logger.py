@@ -12,6 +12,7 @@ _SENSITIVE_PATTERNS = [
     (re.compile(r"(Bearer\s+)[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), r"\1***REDACTED***"),
     (re.compile(r"(token[=:]\s*)['\"]?[A-Za-z0-9\-._~+/]{10,}['\"]?", re.IGNORECASE), r"\1***REDACTED***"),
     (re.compile(r"(key[=:]\s*)['\"]?[A-Za-z0-9\-._~+/]{10,}['\"]?", re.IGNORECASE), r"\1***REDACTED***"),
+    (re.compile(r"(bot)[A-Za-z0-9:_\-]{30,}"), r"\1***REDACTED***"),
 ]
 
 

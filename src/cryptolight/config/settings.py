@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     enable_web: bool = False
     web_host: str = "127.0.0.1"
     web_port: int = 8090
+    web_username: str = ""
+    web_password: str = ""
 
     # 런타임 스케줄 / 타임존
     app_timezone: str = "Asia/Seoul"

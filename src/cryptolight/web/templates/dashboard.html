@@ -133,11 +133,12 @@ const regimeDesc={trending:'Strong directional movement',sideways:'Low volatilit
 
 async function fetchAll(){
   try{
+    const opts={credentials:'same-origin'};
     const[market,portfolio,trades,status]=await Promise.all([
-      fetch('/api/market').then(r=>r.json()),
-      fetch('/api/portfolio').then(r=>r.json()),
-      fetch('/api/trades').then(r=>r.json()),
-      fetch('/api/status').then(r=>r.json()),
+      fetch('/api/market',opts).then(r=>r.json()),
+      fetch('/api/portfolio',opts).then(r=>r.json()),
+      fetch('/api/trades',opts).then(r=>r.json()),
+      fetch('/api/status',opts).then(r=>r.json()),
     ]);
     renderMarket(market);
     renderPortfolio(portfolio);
@@ -204,13 +205,13 @@ function renderStatus(d){
   const ok=h.healthy!==false;
   el.innerHTML=`
     <span><span class="status-dot ${ok?'ok':'error'}"></span>${ok?'Healthy':'Issues detected'}</span>
-    <span>Strategy: ${d.strategy}</span>
-    <span>Mode: ${d.trade_mode}</span>
-    <span>Interval: ${d.interval_minutes}min</span>
-    <span>Symbols: ${(d.symbols||[]).join(', ')}</span>
-    <span>Uptime: ${h.uptime_minutes||0}min</span>
-    <span>Cycles: ${h.total_cycles||0}</span>
-    <span>Errors: ${h.consecutive_errors||0}</span>`;
+    <span>Strategy: ${esc(d.strategy)}</span>
+    <span>Mode: ${esc(d.trade_mode)}</span>
+    <span>Interval: ${esc(d.interval_minutes)}min</span>
+    <span>Symbols: ${esc((d.symbols||[]).join(', '))}</span>
+    <span>Uptime: ${esc(h.uptime_minutes||0)}min</span>
+    <span>Cycles: ${esc(h.total_cycles||0)}</span>
+    <span>Errors: ${esc(h.consecutive_errors||0)}</span>`;
 }
 
 function renderRegime(market){

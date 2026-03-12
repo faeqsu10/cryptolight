@@ -112,3 +112,56 @@ class TestOpenAPIDisabled:
     def test_no_openapi_schema(self, client):
         resp = client.get("/openapi.json")
         assert resp.status_code == 404
+
+
+class TestHTTPBasicAuth:
+    @pytest.fixture
+    def auth_client(self):
+        """인증이 설정된 웹 클라이언트."""
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.strategy_name = "score"
+        settings.trade_mode = "paper"
+        settings.symbol_list = ["KRW-BTC"]
+        settings.schedule_interval_minutes = 5
+        settings.web_username = "admin"
+        settings.web_password = "secret"
+        configure(
+            market_snapshots={},
+            broker=None,
+            repo=None,
+            health=None,
+            settings=settings,
+        )
+        return TestClient(app, raise_server_exceptions=True)
+
+    def test_no_auth_required_when_not_configured(self, client):
+        """인증 미설정 시 자유롭게 접근 가능."""
+        assert client.get("/").status_code == 200
+        assert client.get("/api/market").status_code == 200
+        assert client.get("/api/portfolio").status_code == 200
+        assert client.get("/api/trades").status_code == 200
+        assert client.get("/api/status").status_code == 200
+
+    def test_401_when_no_credentials(self, auth_client):
+        """인증 설정 후 자격증명 없이 접근 시 401."""
+        resp = auth_client.get("/api/status", auth=None)
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == "Basic"
+
+    def test_401_wrong_credentials(self, auth_client):
+        """잘못된 자격증명으로 접근 시 401."""
+        resp = auth_client.get("/api/status", auth=("admin", "wrong"))
+        assert resp.status_code == 401
+
+    def test_200_correct_credentials(self, auth_client):
+        """올바른 자격증명으로 접근 시 200."""
+        resp = auth_client.get("/api/status", auth=("admin", "secret"))
+        assert resp.status_code == 200
+
+    def test_all_endpoints_protected(self, auth_client):
+        """모든 엔드포인트가 인증으로 보호됨."""
+        for path in ["/", "/api/market", "/api/portfolio", "/api/trades", "/api/status"]:
+            resp = auth_client.get(path, auth=None)
+            assert resp.status_code == 401, f"{path} should require auth"

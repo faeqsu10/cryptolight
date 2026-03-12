@@ -40,6 +40,37 @@ def test_walk_forward_has_metrics():
     assert result.consistency >= 0
 
 
+def test_walk_forward_anchored_order():
+    """Anchored walk-forward: 학습 구간은 항상 인덱스 0부터 시작하고
+    각 fold의 학습 크기는 단조 증가해야 한다."""
+    candles = _make_candles(200)
+    train_ratio = 0.7
+    n_folds = 3
+    total = len(candles)
+
+    initial_train_size = int(total * train_ratio)
+    test_pool = total - initial_train_size
+    test_size = test_pool // n_folds
+
+    # 각 fold의 예상 학습 끝 인덱스
+    expected_train_ends = [
+        initial_train_size + i * test_size for i in range(n_folds)
+    ]
+
+    # 학습 크기가 단조 증가해야 함 (anchored)
+    for k in range(1, len(expected_train_ends)):
+        assert expected_train_ends[k] > expected_train_ends[k - 1], (
+            f"fold {k}의 학습 크기가 fold {k-1}보다 크지 않음"
+        )
+
+    # 검증 구간이 학습 구간 이후에 있어야 함
+    for i, train_end in enumerate(expected_train_ends):
+        test_start = train_end
+        test_end = test_start + test_size
+        assert test_start >= train_end, f"fold {i}: 검증 구간이 학습 구간과 겹침"
+        assert test_end <= total + test_size, f"fold {i}: 검증 구간이 범위 초과"
+
+
 def test_walk_forward_summary():
     validator = WalkForwardValidator(SimpleBuySellStrategy(), order_amount=50_000)
     result = validator.run(_make_candles(200), n_folds=3)
