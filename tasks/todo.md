@@ -145,12 +145,30 @@
 - [x] README/pyproject.toml 수정 (jinja2 의존성, 포트/테스트 수)
 - [x] pytest 210개
 
+## 18단계: 전문가 회의 기반 CRITICAL+HIGH 수정 ✅
+- [x] ScoreBasedStrategy 가중치 독립 적용 (rsi_dir, macd_hist 누락 수정)
+- [x] _last_signals 주문 성공 후로 이동 (시그널 차단 버그)
+- [x] Gemini API key URL→header 전환
+- [x] 텔레그램 봇 토큰 로그 마스킹 추가
+- [x] 웹 대시보드 HTTP Basic Auth + CORS
+- [x] SQLite 전체 read 메서드 락 + busy_timeout
+- [x] XSS 이스케이프 보강 (dashboard innerHTML)
+- [x] Walk-Forward 시계열 순서 보존 (anchored 방식)
+- [x] ParameterOptimizer/StrategyArena slippage/spread 전달
+- [x] Docker 보안 강화 (non-root, cap_drop, gcc 제거)
+- [x] pytest 216개
+
 ## 향후 과제
 - [ ] Equity curve 시각화
 - [ ] WebSocket real-time data
-- [ ] 웹 대시보드 인증 (HTTP Basic Auth 등)
 - [ ] 바이낸스 거래소 지원
 - [ ] PostgreSQL 마이그레이션
 - [ ] /tune-now 수동 튜닝 명령어
 - [ ] score threshold / min_confidence 자동 튜닝
 - [ ] HOLD 상태인 종목의 이유 표시
+- [ ] main.py God Module 분할 (orchestrator/trading_engine/telegram_formatter/tuning_engine)
+- [ ] BaseBroker 추상화 완성 (isinstance 제거)
+- [ ] 트레일링 스톱 고점 DB 영속화
+- [ ] 손절 후 확장 쿨다운
+- [ ] 캔들 페이지네이션 (200개 제한 해소)
+- [ ] 미실현 손익 기반 일일 손실 한도
