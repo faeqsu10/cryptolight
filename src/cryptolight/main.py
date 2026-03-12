@@ -554,10 +554,29 @@ def run_strategy(
 
         logger.info("=== Paper Trading 현황 ===\n%s", summary)
         if bot:
-            bot.send_message(
-                f"\U0001f4b0 <b>Paper Trading 현황</b>\n<pre>{html_mod.escape(summary)}</pre>"
-                f"\n\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(market_text)}</pre>"
-            )
+            # 이번 주기 거래 내역 구성
+            cycle_trades_lines = []
+            for sym, snap in _market_snapshots.items():
+                if snap["action"] == "buy":
+                    pos = broker.positions.get(sym)
+                    if pos and pos.quantity > 0:
+                        cycle_trades_lines.append(
+                            f"  \U0001f7e2 <b>{sym.split('-')[1]}</b> 매수 — "
+                            f"{snap['price']:,.0f}원에 구매"
+                        )
+                elif snap["action"] == "sell":
+                    cycle_trades_lines.append(
+                        f"  \U0001f534 <b>{sym.split('-')[1]}</b> 매도 — "
+                        f"{snap['price']:,.0f}원에 판매"
+                    )
+
+            msg_parts = ["\U0001f4b0 <b>Paper Trading 현황</b>"]
+            if cycle_trades_lines:
+                msg_parts.append("\n\U0001f4dd <b>이번 주기 거래</b>")
+                msg_parts.extend(cycle_trades_lines)
+            msg_parts.append(f"\n<pre>{html_mod.escape(summary)}</pre>")
+            msg_parts.append(f"\n\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(market_text)}</pre>")
+            bot.send_message("\n".join(msg_parts))
 
 
 def strategy_job(
