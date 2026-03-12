@@ -57,6 +57,8 @@ class ScoreBasedStrategy(BaseStrategy):
         bb_std_mult: float = 2.0,
         volume_period: int = 20,
         regime: str = "",
+        buy_threshold: int | None = None,
+        sell_threshold: int | None = None,
     ):
         self.rsi_period = rsi_period
         self.rsi_oversold = rsi_oversold
@@ -68,6 +70,8 @@ class ScoreBasedStrategy(BaseStrategy):
         self.bb_std_mult = bb_std_mult
         self.volume_period = volume_period
         self._regime = regime
+        self._custom_buy_threshold = buy_threshold
+        self._custom_sell_threshold = sell_threshold
 
     @property
     def regime(self) -> str:
@@ -86,7 +90,12 @@ class ScoreBasedStrategy(BaseStrategy):
         )
 
     def _get_weights(self) -> dict:
-        return REGIME_WEIGHTS.get(self._regime, DEFAULT_WEIGHTS)
+        weights = dict(REGIME_WEIGHTS.get(self._regime, DEFAULT_WEIGHTS))
+        if self._custom_buy_threshold is not None:
+            weights["buy_threshold"] = self._custom_buy_threshold
+        if self._custom_sell_threshold is not None:
+            weights["sell_threshold"] = self._custom_sell_threshold
+        return weights
 
     def _calc_rsi_scores(
         self, closes: list[float]

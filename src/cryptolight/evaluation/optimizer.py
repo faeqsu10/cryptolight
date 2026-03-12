@@ -40,6 +40,8 @@ PARAM_RANGES: dict[str, dict] = {
         "bb_period": (14, 30),
         "bb_std_mult": (1.5, 3.0),
         "volume_period": (10, 30),
+        "buy_threshold": (30, 60),
+        "sell_threshold": (25, 55),
     },
 }
 
