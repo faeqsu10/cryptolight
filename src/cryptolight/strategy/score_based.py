@@ -14,15 +14,15 @@ logger = logging.getLogger("cryptolight.strategy.score_based")
 REGIME_WEIGHTS: dict[str, dict] = {
     "trending": {
         "rsi": 0.8, "rsi_dir": 0.8, "macd": 1.5, "macd_hist": 1.5,
-        "bb": 0.5, "volume": 1.0, "buy_threshold": 55, "sell_threshold": 45,
+        "bb": 0.5, "volume": 1.0, "buy_threshold": 40, "sell_threshold": 35,
     },
     "sideways": {
         "rsi": 1.2, "rsi_dir": 1.2, "macd": 0.5, "macd_hist": 0.5,
-        "bb": 1.5, "volume": 1.0, "buy_threshold": 65, "sell_threshold": 55,
+        "bb": 1.5, "volume": 1.0, "buy_threshold": 45, "sell_threshold": 40,
     },
     "volatile": {
         "rsi": 1.0, "rsi_dir": 1.0, "macd": 1.0, "macd_hist": 1.0,
-        "bb": 1.0, "volume": 1.0, "buy_threshold": 75, "sell_threshold": 65,
+        "bb": 1.0, "volume": 1.0, "buy_threshold": 50, "sell_threshold": 45,
     },
 }
 DEFAULT_WEIGHTS = REGIME_WEIGHTS["volatile"]
