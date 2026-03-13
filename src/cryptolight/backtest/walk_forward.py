@@ -59,6 +59,7 @@ class WalkForwardValidator:
         slippage_pct: float = 0.0,
         spread_pct: float = 0.0,
         train_ratio: float = 0.7,
+        candle_interval: str = "day",
     ):
         self.strategy = strategy
         self.initial_balance = initial_balance
@@ -67,6 +68,7 @@ class WalkForwardValidator:
         self.slippage_pct = slippage_pct
         self.spread_pct = spread_pct
         self.train_ratio = train_ratio
+        self.candle_interval = candle_interval
 
     def run(self, candles: list[Candle], n_folds: int = 5) -> WalkForwardResult:
         """N개 구간으로 Anchored Walk-Forward Validation 실행.
@@ -115,6 +117,7 @@ class WalkForwardValidator:
                 commission_rate=self.commission_rate,
                 slippage_pct=self.slippage_pct,
                 spread_pct=self.spread_pct,
+                candle_interval=self.candle_interval,
             )
             is_result = is_engine.run(in_sample)
 
@@ -126,6 +129,7 @@ class WalkForwardValidator:
                 commission_rate=self.commission_rate,
                 slippage_pct=self.slippage_pct,
                 spread_pct=self.spread_pct,
+                candle_interval=self.candle_interval,
             )
             oos_result = oos_engine.run(out_sample)
 

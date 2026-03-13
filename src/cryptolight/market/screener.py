@@ -27,6 +27,7 @@ def backtest_filter(
     min_sharpe: float = 0.0,
     initial_balance: float = 1_000_000,
     order_amount: float = 50_000,
+    candle_interval: str = "day",
 ) -> tuple[list[str], dict[str, dict]]:
     """백테스트를 실행하여 최소 Sharpe ratio 이상인 종목만 반환한다.
 
@@ -42,6 +43,7 @@ def backtest_filter(
             strategy=strategy,
             initial_balance=initial_balance,
             order_amount=order_amount,
+            candle_interval=candle_interval,
         )
 
         if len(candles) < strategy.required_candle_count() + 10:
@@ -214,6 +216,7 @@ def run_screening_pipeline(
         candles_by_symbol={s: c for s, c in candles_by_symbol.items() if s in candidates},
         strategy_name=strategy_name,
         min_sharpe=min_sharpe,
+        candle_interval=candle_interval,
     )
     logger.info("백테스트 통과: %s (%d개)", backtest_passed, len(backtest_passed))
 

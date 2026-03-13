@@ -62,6 +62,7 @@ def main():
             order_amount=args.amount,
             slippage_pct=settings.backtest_slippage_pct,
             spread_pct=settings.backtest_spread_pct,
+            candle_interval=settings.candle_interval,
         )
         wf_result = validator.run(candles, n_folds=args.folds)
         summary = wf_result.summary_text()
@@ -83,6 +84,7 @@ def main():
         order_amount=args.amount,
         slippage_pct=settings.backtest_slippage_pct,
         spread_pct=settings.backtest_spread_pct,
+        candle_interval=settings.candle_interval,
     )
     result = engine.run(candles)
     summary = engine.summary_text(result)

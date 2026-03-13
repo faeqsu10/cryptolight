@@ -484,6 +484,7 @@ def self_improvement_job(
             n_folds=3,
             slippage_pct=settings.backtest_slippage_pct,
             spread_pct=settings.backtest_spread_pct,
+            candle_interval=settings.candle_interval,
         )
         arena_results = arena.compete(candles)
         arena_text = arena.summary_text(arena_results)
@@ -872,6 +873,7 @@ def _run_parameter_tuning(
         min_wf_consistency=settings.parameter_tuning_min_wf_consistency,
         slippage_pct=settings.backtest_slippage_pct,
         spread_pct=settings.backtest_spread_pct,
+        candle_interval=settings.candle_interval,
     )
 
     current_strategy = _build_strategy_instance(settings, strategy_name)

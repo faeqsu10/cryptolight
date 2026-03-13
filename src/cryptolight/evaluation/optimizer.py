@@ -81,6 +81,7 @@ class ParameterOptimizer:
         min_trades_per_fold: int = 3,
         slippage_pct: float = 0.0,
         spread_pct: float = 0.0,
+        candle_interval: str = "day",
     ):
         self.initial_balance = initial_balance
         self.order_amount = order_amount
@@ -90,6 +91,7 @@ class ParameterOptimizer:
         self.min_trades_per_fold = min_trades_per_fold
         self.slippage_pct = slippage_pct
         self.spread_pct = spread_pct
+        self.candle_interval = candle_interval
 
     def optimize(
         self,
@@ -177,6 +179,7 @@ class ParameterOptimizer:
             order_amount=self.order_amount,
             slippage_pct=self.slippage_pct,
             spread_pct=self.spread_pct,
+            candle_interval=self.candle_interval,
         )
         bt_result = engine.run(candles)
 
@@ -190,6 +193,7 @@ class ParameterOptimizer:
             order_amount=self.order_amount,
             slippage_pct=self.slippage_pct,
             spread_pct=self.spread_pct,
+            candle_interval=self.candle_interval,
         )
         wf_result = wf_validator.run(candles, n_folds=self.n_folds)
 
