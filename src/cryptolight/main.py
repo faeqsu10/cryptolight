@@ -1,6 +1,7 @@
 """cryptolight 진입점 - 전략 실행, 시그널 알림, paper/live trading, 리스크 관리"""
 
 import argparse
+import logging
 import signal
 import threading
 import time
@@ -40,6 +41,8 @@ from cryptolight.market.screener import run_screening_pipeline
 from cryptolight.strategy import create_strategy
 from cryptolight.strategy.score_based import REGIME_WEIGHTS
 from cryptolight.utils import setup_logger
+
+logger = logging.getLogger("cryptolight.main")
 
 # 중복 시그널 방지: symbol -> action (스레드 안전)
 _last_signals: dict[str, str] = {}
@@ -274,7 +277,7 @@ def run_strategy(
     settings,
 ):
     """각 종목에 대해 전략을 실행하고 시그널을 전송한다."""
-    logger = setup_logger("cryptolight.main")
+
     strategy_name = _get_effective_strategy_name(settings)
     strategy = _build_strategy_instance(settings, strategy_name)
 
@@ -546,7 +549,7 @@ def strategy_job(
     settings,
 ):
     """스케줄러에서 호출되는 전략 래퍼. 에러 시 해당 주기만 스킵."""
-    logger = setup_logger("cryptolight.main")
+
     try:
         run_strategy(client, bot, broker, risk_guard, symbols, settings)
         if _health:
@@ -565,7 +568,7 @@ def daily_summary_job(
     symbols: list[str],
 ):
     """매일 09:00 KST에 실행되는 일일 요약 job"""
-    logger = setup_logger("cryptolight.main")
+
     try:
         pnl_data = repo.get_daily_pnl()
         positions_summary = ""
@@ -622,7 +625,7 @@ def self_improvement_job(
     settings,
 ):
     """주간 자기개선 루프: 성과 평가 → Arena 경쟁 → 전략 전환 판단."""
-    logger = setup_logger("cryptolight.main")
+
     if not settings.enable_auto_optimization:
         return
 
@@ -1052,7 +1055,7 @@ def _run_parameter_tuning(
     candles,
     bot: TelegramBot | None = None,
 ) -> dict:
-    logger = setup_logger("cryptolight.main")
+
     if not settings.enable_auto_parameter_tuning:
         return {"applied": False, "summary": "파라미터 자동 조정 비활성"}
 
@@ -1165,7 +1168,7 @@ def parameter_tuning_job(
     settings,
 ):
     """더 짧은 주기로 현재 전략 파라미터만 미세 조정한다."""
-    logger = setup_logger("cryptolight.main")
+
     if not settings.enable_auto_parameter_tuning:
         return
 
@@ -1206,7 +1209,7 @@ def command_loop(
     stop_event: threading.Event | None = None,
 ):
     """명령어 long polling 루프 (전용 스레드에서 실행). 킬스위치 감지 시 스케줄러 종료."""
-    logger = setup_logger("cryptolight.main")
+
     logger.info("명령어 폴링 스레드 시작 (long polling)")
     consecutive_failures = 0
     backoff_initial = max(0.1, float(getattr(settings, "telegram_poll_backoff_initial_seconds", 1.0)))
@@ -1269,7 +1272,7 @@ def main():
     args = parser.parse_args()
 
     settings = get_settings()
-    logger = setup_logger("cryptolight.main", settings.log_level, settings.log_file)
+    setup_logger("cryptolight.main", settings.log_level, settings.log_file)
 
     once_mode = args.once or settings.schedule_interval_minutes == 0
 
