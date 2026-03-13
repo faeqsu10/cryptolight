@@ -75,15 +75,16 @@ python -m cryptolight.main --once
 
 **시장 국면별 자동 조정**:
 
-| 국면 | 특징 | MACD 가중치 | BB 가중치 | 매수 임계값 |
-|------|------|-----------|----------|-----------|
-| 추세장 (trending) | ADX >= 25 | 1.5x | 0.5x | 55점 |
-| 횡보장 (sideways) | ADX < 25, 변동 낮음 | 0.5x | 1.5x | 65점 |
-| 변동장 (volatile) | BB 폭 >= 6% | 1.0x | 1.0x | 75점 |
+| 국면 | 특징 | MACD 가중치 | BB 가중치 | 매수/매도 임계값 |
+|------|------|-----------|----------|----------------|
+| 추세장 (trending) | ADX >= 25 | 1.5x | 0.5x | 40 / 35점 |
+| 횡보장 (sideways) | ADX < 25, 변동 낮음 | 0.5x | 1.5x | 45 / 40점 |
+| 변동장 (volatile) | BB 폭 >= 6% | 1.0x | 1.0x | 50 / 45점 |
 
 **안전 장치**:
 - confidence 게이트: 신뢰도 40% 미만 시 주문 자동 차단
 - 거래량 부족 시 시그널 무시
+- 매수/매도 임계값은 자동 튜닝 대상 (6시간마다 최적화)
 
 ### 기타 전략
 
@@ -120,6 +121,8 @@ pip install -e ".[web]"
 # .env에 설정 추가
 ENABLE_WEB=true
 WEB_PORT=8090
+WEB_USERNAME=admin
+WEB_PASSWORD=changeme
 
 # 실행 후 브라우저에서 http://localhost:8090 접속
 python -m cryptolight.main
@@ -131,6 +134,7 @@ python -m cryptolight.main
 - 시장 국면 표시 (추세/횡보/변동)
 - 최근 거래 내역
 - 봇 상태 모니터링
+- HTTP Basic Auth 인증 (XSS/CORS 방어 포함)
 
 ## 백테스트
 
@@ -152,9 +156,10 @@ python -m cryptolight.backtest --symbol KRW-BTC --strategy score --days 365 --wa
 1. **성과 평가** — Sharpe ratio, 승률, MDD 분석
 2. **전략 경쟁** — 다중 전략 백테스트 비교 (Arena)
 3. **자동 전환** — 전략 전환은 주 1회만 판단해 과최적화를 줄임
-4. **자동 파라미터 조정** — 현재 전략의 기준값은 더 짧은 주기로 미세 조정
-5. **텔레그램 알림** — 무엇이 왜 바뀌었는지 초보자용 설명과 함께 전송
-6. **롤백** — 전환 후 성과 악화 시 이전 전략으로 복원
+4. **자동 파라미터 조정** — 현재 전략의 기준값(RSI 기간, 매수/매도 임계값 등)은 더 짧은 주기로 미세 조정
+5. **Walk-Forward 검증** — 시계열 순서를 보존하는 anchored 방식으로 과적합 방지
+6. **텔레그램 알림** — 무엇이 왜 바뀌었는지 초보자용 설명과 함께 전송
+7. **롤백** — 전환 후 성과 악화 시 이전 전략으로 복원
 
 ## 리스크 관리
 
@@ -165,7 +170,31 @@ python -m cryptolight.backtest --symbol KRW-BTC --strategy score --days 365 --wa
 - confidence 게이트 (낮은 신뢰도 시그널 차단)
 - 중복 시그널 방지 + 매매 쿨다운
 - API 장애 시 지수 백오프 재시도 (주문 API는 재시도 안 함)
-- SQLite WAL 모드 + 스레드 안전
+- SQLite WAL 모드 + 스레드 안전 (전체 read/write 락 + busy_timeout)
+
+## 초보자 친화 알림
+
+텔레그램 알림은 초보자도 이해할 수 있도록 설계되었다:
+
+- **매수/매도 체결 시**: 종목, 금액, 수량, 사유를 상세히 알림
+- **지표 해설**: RSI, MACD, 볼린저밴드 값에 대한 쉬운 설명 (예: "RSI 28.5: 과매도 — 많이 떨어져서 반등 가능성")
+- **일일 리포트**: 거래 내역, 용어 해설, 실현 손익 판단, 보유 코인별 수량/매수가/현재가/손익 포함
+- **5분 현황**: 이번 주기에 실행된 매수/매도 내역 표시
+
+## 서비스 관리
+
+systemd user service로 관리하여 호스트 재부팅 시 자동 복구된다.
+
+```bash
+# 상태 확인
+systemctl --user status cryptolight.service
+
+# 로그 확인
+journalctl --user -u cryptolight.service -f
+
+# 재시작
+systemctl --user restart cryptolight.service
+```
 
 ## 프로젝트 구조
 
@@ -185,6 +214,7 @@ src/cryptolight/
     volume_filter.py       # 거래량 필터
   market/
     regime.py              # 시장 국면 감지 (ADX + BB)
+    screener.py            # 거래량 상위 코인 자동 스크리닝
   execution/
     paper_broker.py        # Paper Trading
     live_broker.py         # 업비트 실거래
@@ -215,10 +245,18 @@ src/cryptolight/
 ## 테스트
 
 ```bash
-pytest                # 전체 테스트 (현재 210개)
+pytest                # 전체 테스트 (현재 216개)
 ruff check src/       # 린트
 ruff format src/      # 포맷
 ```
+
+## Docker
+
+```bash
+docker compose up -d
+```
+
+보안 강화: non-root 유저, `cap_drop: ALL`, `read_only`, `no-new-privileges`.
 
 ## 라이선스
 
