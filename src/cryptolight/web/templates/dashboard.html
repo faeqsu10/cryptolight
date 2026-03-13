@@ -301,8 +301,8 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
       <div class="card-title">
         <span class="tip-wrap" style="--tip-accent:var(--buy)">
           Portfolio
-          <button class="tip-btn" aria-label="포트폴리오 설명" aria-expanded="false">i</button>
-          <div class="tip-box" role="tooltip">
+          <button class="tip-btn" aria-label="포트폴리오 설명" aria-expanded="false" aria-describedby="tip-portfolio">i</button>
+          <div class="tip-box" role="tooltip" id="tip-portfolio">
             <div class="tip-inner">
               <div class="tip-title">포트폴리오</div>
               <div class="tip-body">
@@ -330,8 +330,8 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
       <div class="card-title">
         <span class="tip-wrap" style="--tip-accent:var(--accent)">
           Market Regime
-          <button class="tip-btn" aria-label="시장 국면 설명" aria-expanded="false">i</button>
-          <div class="tip-box" role="tooltip">
+          <button class="tip-btn" aria-label="시장 국면 설명" aria-expanded="false" aria-describedby="tip-regime">i</button>
+          <div class="tip-box" role="tooltip" id="tip-regime">
             <div class="tip-inner">
               <div class="tip-title">시장 국면 (Market Regime)</div>
               <div class="tip-body">
@@ -353,8 +353,8 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
         <div class="adx-val">
           <span class="tip-wrap" style="--tip-accent:var(--accent)">
             ADX: <span id="adx-val">--</span>
-            <button class="tip-btn" aria-label="ADX 설명" aria-expanded="false">i</button>
-            <div class="tip-box" role="tooltip">
+            <button class="tip-btn" aria-label="ADX 설명" aria-expanded="false" aria-describedby="tip-adx">i</button>
+            <div class="tip-box" role="tooltip" id="tip-adx">
               <div class="tip-inner">
                 <div class="tip-title">ADX (추세 강도 지수)</div>
                 <div class="tip-body">
@@ -387,8 +387,8 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
             <th>
               <span class="tip-wrap" style="--tip-accent:var(--text-dim)">
                 Reason
-                <button class="tip-btn" aria-label="매매 사유 설명" aria-expanded="false">i</button>
-                <div class="tip-box" role="tooltip">
+                <button class="tip-btn" aria-label="매매 사유 설명" aria-expanded="false" aria-describedby="tip-reason">i</button>
+                <div class="tip-box" role="tooltip" id="tip-reason">
                   <div class="tip-inner">
                     <div class="tip-title">매매 사유 (Reason)</div>
                     <div class="tip-body">
@@ -458,6 +458,7 @@ const TIP = {
 };
 
 /* ─── Tooltip markup builder ────────────────────────────────────────────── */
+let _tipId = 0;
 function tipHTML(key, sub) {
   const cfg = sub ? TIP[key][sub] : TIP[key];
   if (!cfg) return '';
@@ -465,7 +466,8 @@ function tipHTML(key, sub) {
     rsi:'RSI 설명', regime:'시장 국면 설명',
     'signal.buy':'매수 신호 설명','signal.sell':'매도 신호 설명','signal.hold':'관망 신호 설명'
   }[sub ? key+'.'+sub : key] || '설명';
-  return `<span class="tip-wrap" style="--tip-accent:${cfg.accent}"><button class="tip-btn" aria-label="${label}" aria-expanded="false">i</button><div class="tip-box" role="tooltip"><div class="tip-inner"><div class="tip-title">${cfg.title}</div><div class="tip-body">${cfg.html}</div></div></div></span>`;
+  const id = 'tip-d-' + (++_tipId);
+  return `<span class="tip-wrap" style="--tip-accent:${cfg.accent}"><button class="tip-btn" aria-label="${label}" aria-expanded="false" aria-describedby="${id}">i</button><div class="tip-box" role="tooltip" id="${id}"><div class="tip-inner"><div class="tip-title">${cfg.title}</div><div class="tip-body">${cfg.html}</div></div></div></span>`;
 }
 
 async function fetchAll(){
@@ -489,6 +491,7 @@ async function fetchAll(){
 }
 
 function renderMarket(data){
+  closeAll();
   const c=document.getElementById('coin-cards');
   if(!Object.keys(data).length){c.innerHTML='<div class="card"><div class="empty-msg">Waiting for market data...</div></div>';return}
   c.innerHTML=Object.entries(data).map(([sym,d])=>{
