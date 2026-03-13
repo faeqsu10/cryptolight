@@ -588,7 +588,6 @@ def daily_summary_job(
             positions_summary = broker.summary_text(prices)
         # 오늘 거래 내역 조회
         today_trades = repo.get_trades(limit=50)
-        from datetime import datetime
         today_str = datetime.now().strftime("%Y-%m-%d")
         today_trades = [t for t in today_trades if t.timestamp.startswith(today_str)]
         # 전략별 성과 추가
