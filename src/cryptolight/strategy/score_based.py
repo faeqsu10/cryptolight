@@ -135,11 +135,11 @@ class ScoreBasedStrategy(BaseStrategy):
         if rsi >= self.rsi_overbought:
             rsi_base_sell = BASE_SCORES["rsi"]
 
-        # RSI 방향성
+        # RSI 방향성 — 과매도/과매수 구간에서의 방향 전환만 반영
         if prev_rsi is not None:
-            if rsi > prev_rsi:  # 반등 시작
+            if rsi > prev_rsi and rsi <= self.rsi_oversold + 10:  # 과매도 근처에서 반등
                 rsi_dir_buy = BASE_SCORES["rsi_dir"]
-            if rsi < prev_rsi:  # 하락 시작
+            if rsi < prev_rsi and rsi >= self.rsi_overbought - 10:  # 과매수 근처에서 하락
                 rsi_dir_sell = BASE_SCORES["rsi_dir"]
 
         indicators = {"rsi": round(rsi, 2)}
@@ -189,10 +189,10 @@ class ScoreBasedStrategy(BaseStrategy):
         if macd < signal_val:
             macd_base_sell = BASE_SCORES["macd"]
 
-        # 히스토그램 모멘텀
-        if hist > prev_hist:
+        # 히스토그램 모멘텀 — MACD 방향과 일치할 때만 확인 신호
+        if hist > prev_hist and macd > signal_val:  # MACD 매수 + 모멘텀 증가
             macd_hist_buy = BASE_SCORES["macd_hist"]
-        if hist < prev_hist:
+        if hist < prev_hist and macd < signal_val:  # MACD 매도 + 모멘텀 감소
             macd_hist_sell = BASE_SCORES["macd_hist"]
 
         indicators = {
@@ -231,7 +231,7 @@ class ScoreBasedStrategy(BaseStrategy):
         return buy_score, sell_score, indicators
 
     def _calc_volume_scores(self, candles: list[Candle]) -> tuple[float, float, dict]:
-        """거래량 관련 매수/매도 점수 계산."""
+        """거래량 관련 매수/매도 점수 계산 — 가격 방향과 연동."""
         if len(candles) < self.volume_period + 1:
             return 0, 0, {}
 
@@ -243,10 +243,17 @@ class ScoreBasedStrategy(BaseStrategy):
             return 0, 0, {}
 
         volume_ratio = current_volume / avg_volume
-        score = BASE_SCORES["volume"] if volume_ratio >= 1.0 else 0.0
-
         indicators = {"volume_ratio": round(volume_ratio, 2)}
-        return score, score, indicators  # 거래량은 매수/매도 동일
+
+        if volume_ratio < 1.0:
+            return 0, 0, indicators
+
+        # 가격 방향에 따라 매수/매도 한쪽에만 기여
+        price_change = candles[-1].close - candles[-2].close
+        buy_score = BASE_SCORES["volume"] if price_change > 0 else 0.0
+        sell_score = BASE_SCORES["volume"] if price_change < 0 else 0.0
+
+        return buy_score, sell_score, indicators
 
     def analyze(self, candles: list[Candle]) -> Signal:
         if len(candles) < self.required_candle_count():

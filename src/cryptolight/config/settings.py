@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     absolute_max_order_krw: int = 500_000  # 하드캡: 어떤 경우에도 이 금액 초과 불가
     daily_loss_limit_krw: int = 100_000
     max_positions: int = 5
-    stop_loss_pct: float = -5.0
+    stop_loss_pct: float = -7.0
     take_profit_pct: float = 10.0
     trailing_stop_pct: float = 0.0  # >0이면 트레일링 스톱 활성화 (예: 3.0 = 고점 대비 -3%)
     target_symbols: str = "KRW-BTC,KRW-ETH"
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     parameter_tuning_cooldown_hours: int = 12  # 파라미터 조정 후 재조정까지 대기
     parameter_tuning_lookback_candles: int = 300  # 파라미터 조정용 캔들 수
     parameter_tuning_n_folds: int = 3  # 파라미터 조정 Walk-Forward fold 수
-    parameter_tuning_min_wf_consistency: float = 50.0  # 파라미터 조정 최소 WF 일관성
+    parameter_tuning_min_wf_consistency: float = 66.7  # 파라미터 조정 최소 WF 일관성
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

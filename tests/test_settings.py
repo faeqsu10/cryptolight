@@ -33,7 +33,7 @@ def test_default_settings(monkeypatch):
     assert s.parameter_tuning_cooldown_hours == 12
     assert s.parameter_tuning_lookback_candles == 300
     assert s.parameter_tuning_n_folds == 3
-    assert s.parameter_tuning_min_wf_consistency == 50.0
+    assert s.parameter_tuning_min_wf_consistency == 66.7
 
 
 def test_trade_mode_validation():

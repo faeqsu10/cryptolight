@@ -3,6 +3,7 @@ import statistics
 from dataclasses import dataclass, field
 
 from cryptolight.exchange.base import Candle
+from cryptolight.market.regime import MarketRegime
 from cryptolight.strategy.base import BaseStrategy
 
 
@@ -35,6 +36,8 @@ class BacktestEngine:
         commission_rate: float = 0.0005,
         slippage_pct: float = 0.0,
         spread_pct: float = 0.0,
+        enable_regime: bool = False,
+        candle_interval: str = "day",
     ):
         self.strategy = strategy
         self.initial_balance = initial_balance
@@ -42,6 +45,8 @@ class BacktestEngine:
         self.commission_rate = commission_rate
         self.slippage_pct = slippage_pct / 100  # % → 비율
         self.spread_pct = spread_pct / 100
+        self.candle_interval = candle_interval
+        self._regime_detector = MarketRegime() if enable_regime else None
 
     def _apply_slippage(self, price: float, side: str) -> float:
         """매수 시 불리한 방향으로 슬리피지+스프레드 적용."""
@@ -49,6 +54,21 @@ class BacktestEngine:
         if side == "buy":
             return price * (1 + impact)
         return price * (1 - impact)
+
+    def _candles_per_year(self) -> int:
+        """캔들 주기에 따른 연간 캔들 수 반환."""
+        interval_map = {
+            "day": 365,
+            "minute240": 365 * 6,      # 4시간봉: 하루 6개
+            "minute60": 365 * 24,      # 1시간봉: 하루 24개
+            "minute30": 365 * 48,      # 30분봉
+            "minute15": 365 * 96,      # 15분봉
+            "minute10": 365 * 144,     # 10분봉
+            "minute5": 365 * 288,      # 5분봉
+            "minute3": 365 * 480,      # 3분봉
+            "minute1": 365 * 1440,     # 1분봉
+        }
+        return interval_map.get(self.candle_interval, 365)
 
     def _calc_buy_hold(self, candles: list[Candle], start_idx: int) -> tuple[float, float]:
         """Buy & Hold 벤치마크 계산."""
@@ -77,6 +97,13 @@ class BacktestEngine:
 
         for i in range(required, len(candles)):
             window = candles[: i + 1]
+
+            # 백테스트에서도 시장 국면 감지 (실전과 동일)
+            if self._regime_detector and hasattr(self.strategy, 'regime'):
+                if len(window) >= self._regime_detector.required_candle_count():
+                    regime_info = self._regime_detector.detect(window)
+                    self.strategy.regime = regime_info["regime"]
+
             signal = self.strategy.analyze(window)
             price = candles[i].close
 
@@ -124,11 +151,12 @@ class BacktestEngine:
                 ret = (equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]
                 daily_returns.append(ret)
 
-        # Sharpe ratio (연율화, 코인은 365일)
+        # Sharpe ratio (캔들 주기에 맞춰 연율화)
+        candles_per_year = self._candles_per_year()
         if len(daily_returns) >= 2:
             std = statistics.stdev(daily_returns)
             if std > 0:
-                sharpe_ratio = (statistics.mean(daily_returns) / std) * math.sqrt(365)
+                sharpe_ratio = (statistics.mean(daily_returns) / std) * math.sqrt(candles_per_year)
             else:
                 sharpe_ratio = 0.0
         else:

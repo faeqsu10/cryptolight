@@ -271,6 +271,13 @@ def run_strategy(
                     )
 
         elif broker and signal_result.action == "sell":
+            # 매도에도 confidence 게이트 적용 (손절/익절은 위에서 별도 처리)
+            if signal_result.confidence < settings.min_confidence:
+                logger.info(
+                    "매도 신뢰도 부족 스킵: %s confidence=%.2f < threshold=%.2f",
+                    symbol, signal_result.confidence, settings.min_confidence,
+                )
+                continue
             _sell_qty = 0.0
             _sell_order = None
             pos = broker.get_position(symbol)
@@ -955,16 +962,33 @@ def parameter_tuning_job(
     try:
         strategy_name = _get_effective_strategy_name(settings)
         strategy = _build_strategy_instance(settings, strategy_name)
-        symbol = symbols[0] if symbols else (settings.symbol_list[0] if settings.symbol_list else "KRW-BTC")
         candle_count = max(
             settings.parameter_tuning_lookback_candles,
             strategy.required_candle_count() * 3,
         )
-        candles = client.get_candles(
-            symbol,
-            interval=settings.candle_interval,
-            count=candle_count,
-        )
+
+        # 모든 대상 종목의 캔들로 파라미터 튜닝 (단일 종목 과적합 방지)
+        tune_symbols = symbols if symbols else settings.symbol_list
+        if not tune_symbols:
+            tune_symbols = ["KRW-BTC"]
+        all_candles: list[list] = []
+        for sym in tune_symbols:
+            try:
+                sym_candles = client.get_candles(
+                    sym,
+                    interval=settings.candle_interval,
+                    count=candle_count,
+                )
+                if len(sym_candles) >= strategy.required_candle_count():
+                    all_candles.append(sym_candles)
+            except Exception:
+                logger.warning("파라미터 튜닝 캔들 조회 실패: %s", sym)
+
+        if not all_candles:
+            logger.warning("파라미터 튜닝: 유효 캔들 없음")
+            return
+
+        candles = all_candles[0]
         result = _run_parameter_tuning(
             repo=repo,
             settings=settings,
