@@ -90,38 +90,7 @@ def _build_strategy_instance(settings, strategy_name: str | None = None, params:
 
 
 def _collect_tunable_params(strategy_name: str, strategy) -> dict:
-    if strategy_name == "rsi":
-        return {
-            "period": strategy.period,
-            "oversold": strategy.oversold,
-            "overbought": strategy.overbought,
-        }
-    if strategy_name == "macd":
-        return {
-            "fast": strategy.fast,
-            "slow": strategy.slow,
-            "signal_period": strategy.signal_period,
-        }
-    if strategy_name == "bollinger":
-        return {
-            "period": strategy.period,
-            "std_mult": strategy.std_mult,
-        }
-    if strategy_name == "volatility_breakout":
-        return {"k": strategy.k}
-    if strategy_name == "score":
-        return {
-            "rsi_period": strategy.rsi_period,
-            "rsi_oversold": strategy.rsi_oversold,
-            "rsi_overbought": strategy.rsi_overbought,
-            "macd_fast": strategy.macd_fast,
-            "macd_slow": strategy.macd_slow,
-            "macd_signal": strategy.macd_signal,
-            "bb_period": strategy.bb_period,
-            "bb_std_mult": strategy.bb_std_mult,
-            "volume_period": strategy.volume_period,
-        }
-    return {}
+    return strategy.get_tunable_params()
 
 
 def _load_active_strategy_parameters(repo: TradeRepository, settings, logger=None) -> dict:

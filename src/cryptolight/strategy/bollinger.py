@@ -11,6 +11,9 @@ class BollingerStrategy(BaseStrategy):
         self.period = period
         self.std_mult = std_mult
 
+    def get_tunable_params(self) -> dict:
+        return {"period": self.period, "std_mult": self.std_mult}
+
     def required_candle_count(self) -> int:
         return self.period
 

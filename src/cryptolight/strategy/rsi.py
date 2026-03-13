@@ -43,6 +43,9 @@ class RSIStrategy(BaseStrategy):
         self.oversold = oversold
         self.overbought = overbought
 
+    def get_tunable_params(self) -> dict:
+        return {"period": self.period, "oversold": self.oversold, "overbought": self.overbought}
+
     def required_candle_count(self) -> int:
         return self.period + 2
 

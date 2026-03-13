@@ -26,6 +26,9 @@ class MACDStrategy(BaseStrategy):
         self.slow = slow
         self.signal_period = signal_period
 
+    def get_tunable_params(self) -> dict:
+        return {"fast": self.fast, "slow": self.slow, "signal_period": self.signal_period}
+
     def required_candle_count(self) -> int:
         return self.slow + self.signal_period + 1
 

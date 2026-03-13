@@ -8,6 +8,9 @@ class VolatilityBreakoutStrategy(BaseStrategy):
     def __init__(self, k: float = 0.5):
         self.k = k
 
+    def get_tunable_params(self) -> dict:
+        return {"k": self.k}
+
     def required_candle_count(self) -> int:
         return 2
 
