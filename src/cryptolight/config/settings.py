@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # 전략
     strategy_name: str = "score"  # rsi | macd | bollinger | volatility_breakout | ensemble | score
     ensemble_strategies: str = "rsi,macd,bollinger"  # 앙상블에 사용할 전략 목록
-    min_confidence: float = 0.4  # 최소 신뢰도 — 이 미만이면 주문 차단
+    min_confidence: float = 0.3  # 최소 신뢰도 — 이 미만이면 주문 차단
     candle_interval: str = "minute240"  # 캔들 주기: day, minute240(4시간), minute60(1시간) 등
 
     # 자동 종목 스크리닝
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     position_risk_pct: float = 2.0  # percent 모드: 총자산의 N%
 
     # 쿨다운
-    trade_cooldown_seconds: int = 300  # 동일 종목 재주문 대기 (5분)
+    trade_cooldown_seconds: int = 180  # 동일 종목 재주문 대기 (3분)
     max_orders_per_hour: int = 10  # 시간당 최대 주문 횟수
 
     # 캔들 캐시
