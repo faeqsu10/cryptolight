@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     # 캔들 캐시
     candle_cache_ttl: int = 60  # 캔들 캐시 TTL (초)
 
+    # 거래소 수수료
+    commission_rate: float = 0.0005  # 업비트 0.05%
+
     # 백테스트
     backtest_slippage_pct: float = 0.1  # 슬리피지 시뮬레이션 (0.1%)
     backtest_spread_pct: float = 0.05  # 스프레드 시뮬레이션 (0.05%)

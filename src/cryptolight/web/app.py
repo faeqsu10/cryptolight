@@ -36,12 +36,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8090"],
-    allow_methods=["GET"],
-    allow_credentials=True,
-)
+
+# CORS origin은 configure()에서 동적으로 설정
+_cors_configured = False
 
 
 @dataclass(frozen=True)
@@ -60,10 +57,11 @@ _refs: dict = {}
 
 
 def verify_credentials(credentials: HTTPBasicCredentials | None = Depends(security)):
-    """HTTP Basic Auth 검증. username/password 미설정 시 통과 (로컬 개발용)."""
+    """HTTP Basic Auth 검증. username/password 미설정 시 경고 로그 후 통과."""
     ws: WebSettings = _refs.get("settings", WebSettings())
     if not ws.username or not ws.password:
-        return  # 인증 미설정 시 통과
+        logger.warning("웹 대시보드 인증 미설정 — WEB_USERNAME/WEB_PASSWORD 환경변수를 설정하세요")
+        return  # 인증 미설정 시 경고 후 통과 (로컬 개발용)
     if credentials is None:
         raise HTTPException(
             status_code=401,
@@ -88,6 +86,7 @@ def configure(
     settings=None,
 ):
     """main.py에서 호출하여 데이터 참조를 주입한다."""
+    global _cors_configured
     _refs["market_snapshots"] = market_snapshots
     _refs["broker"] = broker
     _refs["repo"] = repo
@@ -102,8 +101,27 @@ def configure(
             username=getattr(settings, "web_username", ""),
             password=getattr(settings, "web_password", ""),
         )
+        # CORS origin을 설정에서 동적으로 생성
+        if not _cors_configured:
+            host = getattr(settings, "web_host", "127.0.0.1")
+            port = getattr(settings, "web_port", 8090)
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=[f"http://{host}:{port}"],
+                allow_methods=["GET"],
+                allow_credentials=True,
+            )
+            _cors_configured = True
     else:
         _refs["settings"] = WebSettings()
+        if not _cors_configured:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["http://127.0.0.1:8090"],
+                allow_methods=["GET"],
+                allow_credentials=True,
+            )
+            _cors_configured = True
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -133,12 +151,10 @@ async def api_market(_: None = Depends(verify_credentials)):
 
 @app.get("/api/portfolio")
 async def api_portfolio(_: None = Depends(verify_credentials)):
-    from cryptolight.execution.paper_broker import PaperBroker
-
     broker = _refs.get("broker")
     snapshots = dict(_refs.get("market_snapshots", {}))  # shallow copy
 
-    if not isinstance(broker, PaperBroker):
+    if broker is None:
         return {
             "cash": 0, "equity": 0, "pnl": 0, "pnl_pct": 0,
             "initial_balance": 0, "positions": [],

@@ -304,17 +304,10 @@ def run_strategy(
         if risk_guard:
             _sl_avg_price = 0.0
             _sl_quantity = 0.0
-            if isinstance(broker, PaperBroker):
-                pos = broker.positions.get(symbol)
-                if pos and pos.quantity > 0:
-                    _sl_avg_price = pos.avg_price
-                    _sl_quantity = pos.quantity
-            elif isinstance(broker, LiveBroker):
-                currency = symbol.split("-")[1]
-                coin_bal = client.get_balance(currency)
-                if coin_bal and coin_bal.available > 0:
-                    _sl_quantity = coin_bal.available
-                    _sl_avg_price = coin_bal.avg_buy_price if hasattr(coin_bal, "avg_buy_price") and coin_bal.avg_buy_price else 0.0
+            pos = broker.get_position(symbol)
+            if pos:
+                _sl_avg_price = pos.avg_price
+                _sl_quantity = pos.quantity
 
             if _sl_quantity > 0 and _sl_avg_price > 0:
                 sl_tp = risk_guard.check_stop_loss_take_profit(
@@ -394,34 +387,10 @@ def run_strategy(
 
             # 리스크 체크
             if risk_guard:
-                if isinstance(broker, PaperBroker):
-                    _balance_krw = broker.balance_krw
-                    _active_positions = sum(
-                        1 for p in broker.positions.values() if p.quantity > 0
-                    )
-                    _already_holding = (
-                        symbol in broker.positions
-                        and broker.positions[symbol].quantity > 0
-                    )
-                elif isinstance(broker, LiveBroker):
-                    # HIGH-3: 잔고 일괄 조회 재활용
-                    if "_live_balances" not in _market_snapshots:
-                        all_balances = client.get_balances()
-                        _market_snapshots["_live_balances"] = {b.currency: b for b in all_balances}
-                    bal_map = _market_snapshots["_live_balances"]
-                    krw_bal = bal_map.get("KRW")
-                    _balance_krw = krw_bal.available if krw_bal else 0.0
-                    _active_positions = sum(
-                        1 for b in bal_map.values()
-                        if b.currency != "KRW" and b.available > 0
-                    )
-                    currency = symbol.split("-")[1]
-                    coin_bal = bal_map.get(currency)
-                    _already_holding = bool(coin_bal and coin_bal.available > 0)
-                else:
-                    _balance_krw = 0.0
-                    _active_positions = 0
-                    _already_holding = False
+                _balance_krw = broker.get_balance_krw()
+                _positions = broker.get_positions()
+                _active_positions = sum(1 for p in _positions.values() if p.quantity > 0)
+                _already_holding = broker.is_holding(symbol)
 
                 check = risk_guard.check_buy(
                     symbol, settings.max_order_amount_krw,
@@ -437,7 +406,7 @@ def run_strategy(
 
             # 포지션 사이징 (시장 국면 가중치 반영)
             if _position_sizer:
-                equity = broker.get_equity({symbol: ticker.price}) if isinstance(broker, PaperBroker) else settings.max_order_amount_krw
+                equity = broker.get_equity({symbol: ticker.price})
                 confidence = signal_result.confidence
                 if regime_info:
                     confidence *= regime_info["trade_weight"]
@@ -469,25 +438,14 @@ def run_strategy(
         elif broker and signal_result.action == "sell":
             _sell_qty = 0.0
             _sell_order = None
-            if isinstance(broker, PaperBroker):
-                pos = broker.positions.get(symbol)
-                if pos and pos.quantity > 0:
-                    _sell_qty = pos.quantity
-                    _sell_order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
-                    if _sell_order:
-                        logger.info("매도 체결: %s %.8f [%s]", symbol, pos.quantity, settings.trade_mode)
-                else:
-                    logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
-            elif isinstance(broker, LiveBroker):
-                currency = symbol.split("-")[1]
-                balance = client.get_balance(currency)
-                if balance and balance.available > 0:
-                    _sell_qty = balance.available
-                    _sell_order = broker.sell_market(symbol, balance.available, ticker.price, reason=signal_result.reason, strategy=strategy_name)
-                    if _sell_order:
-                        logger.info("매도 체결: %s %.8f [live]", symbol, balance.available)
-                else:
-                    logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
+            pos = broker.get_position(symbol)
+            if pos:
+                _sell_qty = pos.quantity
+                _sell_order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
+                if _sell_order:
+                    logger.info("매도 체결: %s %.8f [%s]", symbol, pos.quantity, settings.trade_mode)
+            else:
+                logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
 
             if _sell_order:
                 with _signal_lock:
@@ -530,11 +488,11 @@ def run_strategy(
     # HIGH-3: Live 모드 잔고 캐시 클리어 (다음 주기에 갱신)
     _market_snapshots.pop("_live_balances", None)
 
-    # Paper trading 요약 + 시장 상태 (MEDIUM-3: 이미 수집된 가격 재활용)
-    if isinstance(broker, PaperBroker):
+    # 포트폴리오 요약 + 시장 상태 (MEDIUM-3: 이미 수집된 가격 재활용)
+    if broker is not None:
         prices = {sym: snap["price"] for sym, snap in _market_snapshots.items() if isinstance(snap, dict) and "price" in snap}
         # 보유 중이지만 현재 symbols에 없는 종목도 가격 조회
-        for pos_symbol, pos in broker.positions.items():
+        for pos_symbol, pos in broker.get_positions().items():
             if pos.quantity > 0 and pos_symbol not in prices:
                 try:
                     pos_ticker = client.get_ticker(pos_symbol)
@@ -558,7 +516,7 @@ def run_strategy(
             cycle_trades_lines = []
             for sym, snap in _market_snapshots.items():
                 if snap["action"] == "buy":
-                    pos = broker.positions.get(sym)
+                    pos = broker.get_position(sym)
                     if pos and pos.quantity > 0:
                         cycle_trades_lines.append(
                             f"  \U0001f7e2 <b>{sym.split('-')[1]}</b> 매수 — "
@@ -611,13 +569,13 @@ def daily_summary_job(
     try:
         pnl_data = repo.get_daily_pnl()
         positions_summary = ""
-        if isinstance(broker, PaperBroker):
+        if broker is not None:
             prices = {}
             for symbol in symbols:
                 ticker = client.get_ticker(symbol)
                 prices[symbol] = ticker.price
             # 보유 중이지만 symbols에 없는 종목도 가격 조회
-            for pos_symbol, pos in broker.positions.items():
+            for pos_symbol, pos in broker.get_positions().items():
                 if pos.quantity > 0 and pos_symbol not in prices:
                     try:
                         pos_ticker = client.get_ticker(pos_symbol)
@@ -635,8 +593,8 @@ def daily_summary_job(
         strategy_summary = tracker.summary_text()
         # 보유 코인 상세 정보 구성
         holdings = []
-        if isinstance(broker, PaperBroker):
-            for pos_sym, pos in broker.positions.items():
+        if broker is not None:
+            for pos_sym, pos in broker.get_positions().items():
                 if pos.quantity > 0:
                     cur_price = prices.get(pos_sym, 0)
                     holdings.append({
@@ -649,7 +607,7 @@ def daily_summary_job(
                         "cost": pos.quantity * pos.avg_price,
                         "pnl": (cur_price - pos.avg_price) * pos.quantity,
                     })
-        bot.send_daily_summary(pnl_data, positions_summary, today_trades, holdings, broker.balance_krw if isinstance(broker, PaperBroker) else 0)
+        bot.send_daily_summary(pnl_data, positions_summary, today_trades, holdings, broker.get_balance_krw() if broker else 0)
         if strategy_summary and "데이터 없음" not in strategy_summary:
             bot.send_message(f"<b>전략별 성과</b>\n<pre>{strategy_summary}</pre>")
         logger.info("일일 요약 전송 완료")
@@ -1359,6 +1317,7 @@ def main():
         take_profit_pct=settings.take_profit_pct,
         trailing_stop_pct=settings.trailing_stop_pct,
         repo=repo,
+        commission_rate=settings.commission_rate,
     )
 
     client = UpbitClient(settings.upbit_access_key, settings.upbit_secret_key)
@@ -1392,12 +1351,13 @@ def main():
     )
 
     if settings.trade_mode == "paper":
-        broker = PaperBroker(initial_balance=settings.paper_initial_balance, repo=repo)
+        broker = PaperBroker(initial_balance=settings.paper_initial_balance, repo=repo, commission_rate=settings.commission_rate)
         logger.info("Paper trading 초기화: 초기 자금 %s KRW", f"{broker.initial_balance:,.0f}")
     elif settings.trade_mode == "live":
         broker = LiveBroker(
             client=client, repo=repo,
             absolute_max_order_krw=settings.absolute_max_order_krw,
+            commission_rate=settings.commission_rate,
         )
         logger.info("Live trading 초기화 (하드캡: %s KRW)", f"{settings.absolute_max_order_krw:,.0f}")
         if bot:

@@ -2,6 +2,7 @@ import json
 import logging
 import sqlite3
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from cryptolight.storage.models import TradeRecord
@@ -20,7 +21,7 @@ class TradeRepository:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._create_tables()
 
     def _create_tables(self):
@@ -119,7 +120,6 @@ class TradeRepository:
     def get_daily_pnl(self, date: str | None = None) -> dict:
         """일일 실현 손익 계산. date 형식: YYYY-MM-DD"""
         if date is None:
-            from datetime import datetime
             date = datetime.now().strftime("%Y-%m-%d")
 
         with self._lock:
@@ -244,7 +244,6 @@ class TradeRepository:
         self, from_strategy: str, to_strategy: str, reason: str
     ) -> None:
         """전략 전환을 기록한다."""
-        from datetime import datetime
         with self._lock:
             self._conn.execute(
                 "INSERT INTO strategy_switches (from_strategy, to_strategy, reason, switched_at) VALUES (?, ?, ?, ?)",
@@ -283,8 +282,6 @@ class TradeRepository:
         previous_params: dict | None = None,
     ) -> list[dict]:
         """전략 파라미터 변경을 기록하고 현재 상태를 갱신한다."""
-        from datetime import datetime
-
         explanations = explanations or {}
         current_params = previous_params or self.get_strategy_parameters(strategy)
         applied_at = datetime.now().isoformat()

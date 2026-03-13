@@ -1,40 +1,33 @@
 import logging
 import threading
-from dataclasses import dataclass
 
 from cryptolight.exchange.base import OrderResult
-from cryptolight.execution.base import BaseBroker
+from cryptolight.execution.base import BaseBroker, PositionInfo
 from cryptolight.storage.models import TradeRecord
 from cryptolight.storage.repository import TradeRepository
 
 logger = logging.getLogger("cryptolight.execution.paper")
 
-
-@dataclass
-class PaperPosition:
-    symbol: str
-    quantity: float = 0.0
-    avg_price: float = 0.0
-    total_cost: float = 0.0
+# 하위 호환성을 위한 별칭
+PaperPosition = PositionInfo
 
 
 class PaperBroker(BaseBroker):
     """가상 매매 실행기. 실제 주문 없이 시뮬레이션한다."""
 
-    COMMISSION_RATE = 0.0005  # 업비트 0.05%
-
-    def __init__(self, initial_balance: float, repo: TradeRepository | None = None):
+    def __init__(self, initial_balance: float, repo: TradeRepository | None = None, commission_rate: float = 0.0005):
         self.balance_krw = initial_balance
         self.initial_balance = initial_balance
-        self.positions: dict[str, PaperPosition] = {}
+        self.positions: dict[str, PositionInfo] = {}
         self._repo = repo
         self._lock = threading.Lock()
+        self.commission_rate = commission_rate
 
         # DB에서 포지션 복구
         if self._repo:
             saved_positions, saved_balance = self._repo.load_positions()
             for symbol, data in saved_positions.items():
-                self.positions[symbol] = PaperPosition(
+                self.positions[symbol] = PositionInfo(
                     symbol=data["symbol"],
                     quantity=data["quantity"],
                     avg_price=data["avg_price"],
@@ -45,7 +38,7 @@ class PaperBroker(BaseBroker):
 
     def buy_market(self, symbol: str, amount_krw: float, current_price: float, reason: str = "", strategy: str = "") -> OrderResult | None:
         with self._lock:
-            commission = amount_krw * self.COMMISSION_RATE
+            commission = amount_krw * self.commission_rate
             total_cost = amount_krw + commission
 
             if total_cost > self.balance_krw:
@@ -56,7 +49,7 @@ class PaperBroker(BaseBroker):
             self.balance_krw -= total_cost
 
             # 포지션 업데이트
-            pos = self.positions.get(symbol, PaperPosition(symbol=symbol))
+            pos = self.positions.get(symbol, PositionInfo(symbol=symbol))
             new_total = pos.quantity * pos.avg_price + amount_krw
             pos.quantity += quantity
             pos.avg_price = new_total / pos.quantity if pos.quantity > 0 else 0
@@ -94,7 +87,7 @@ class PaperBroker(BaseBroker):
                 return None
 
             proceeds = quantity * current_price
-            commission = proceeds * self.COMMISSION_RATE
+            commission = proceeds * self.commission_rate
             self.balance_krw += proceeds - commission
 
             # 포지션 업데이트
@@ -123,6 +116,12 @@ class PaperBroker(BaseBroker):
             price=current_price, quantity=quantity, amount=proceeds,
             state="done",
         )
+
+    def get_balance_krw(self) -> float:
+        return self.balance_krw
+
+    def get_positions(self) -> dict[str, PositionInfo]:
+        return self.positions
 
     def get_equity(self, prices: dict[str, float]) -> float:
         """총 자산 = 현금 + 보유 코인 평가액"""

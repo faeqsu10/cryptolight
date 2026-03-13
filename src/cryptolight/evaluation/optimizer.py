@@ -172,7 +172,7 @@ class ParameterOptimizer:
 
         # 백테스트
         engine = BacktestEngine(
-            strategy=create_strategy(strategy_name, **params),
+            strategy=strategy,
             initial_balance=self.initial_balance,
             order_amount=self.order_amount,
             slippage_pct=self.slippage_pct,
@@ -183,7 +183,7 @@ class ParameterOptimizer:
         if bt_result.total_trades < self.min_trades_per_fold * self.n_folds:
             return None
 
-        # Walk-Forward 검증
+        # Walk-Forward 검증 (별도 인스턴스 필요 — 내부 상태 분리)
         wf_validator = WalkForwardValidator(
             strategy=create_strategy(strategy_name, **params),
             initial_balance=self.initial_balance,

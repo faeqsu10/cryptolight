@@ -86,10 +86,10 @@ class TestLiveBrokerStrategy:
 
 class TestThreadSafety:
     def test_repository_has_lock(self, tmp_path):
-        """TradeRepository에 threading.Lock이 있는지 확인"""
+        """TradeRepository에 threading.RLock이 있는지 확인"""
         repo = TradeRepository(db_path=tmp_path / "test.db")
         assert hasattr(repo, "_lock")
-        assert isinstance(repo._lock, type(threading.Lock()))
+        assert isinstance(repo._lock, type(threading.RLock()))
         repo.close()
 
     def test_paper_broker_has_lock(self):

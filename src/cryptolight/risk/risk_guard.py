@@ -17,8 +17,6 @@ class RiskCheckResult:
 class RiskGuard:
     """주문 실행 전 리스크 검증을 수행한다."""
 
-    COMMISSION_RATE = 0.0005  # 업비트 0.05%
-
     def __init__(
         self,
         max_order_amount_krw: float,
@@ -28,6 +26,7 @@ class RiskGuard:
         take_profit_pct: float = 10.0,
         trailing_stop_pct: float = 0.0,
         repo: TradeRepository | None = None,
+        commission_rate: float = 0.0005,
     ):
         self.max_order_amount_krw = max_order_amount_krw
         self.daily_loss_limit_krw = daily_loss_limit_krw
@@ -36,6 +35,7 @@ class RiskGuard:
         self.take_profit_pct = take_profit_pct
         self.trailing_stop_pct = trailing_stop_pct
         self._repo = repo
+        self.commission_rate = commission_rate
         # 트레일링 스톱: 종목별 최고가 추적
         self._trailing_highs: dict[str, float] = {}
 
@@ -56,7 +56,7 @@ class RiskGuard:
             )
 
         # 2) 잔고 부족
-        if amount_krw * (1 + self.COMMISSION_RATE) > balance_krw:
+        if amount_krw * (1 + self.commission_rate) > balance_krw:
             return RiskCheckResult(
                 allowed=False,
                 reason=f"잔고 부족: 필요 {amount_krw:,.0f}, 가용 {balance_krw:,.0f} KRW",

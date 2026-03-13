@@ -18,22 +18,25 @@ __all__ = [
     "ScoreBasedStrategy",
     "VolumeFilter",
     "create_strategy",
+    "STRATEGY_REGISTRY",
 ]
+
+STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
+    "rsi": RSIStrategy,
+    "macd": MACDStrategy,
+    "bollinger": BollingerStrategy,
+    "volatility_breakout": VolatilityBreakoutStrategy,
+    "score": ScoreBasedStrategy,
+}
 
 
 def create_strategy(name: str, **kwargs) -> BaseStrategy:
-    if name == "rsi":
-        return RSIStrategy(**kwargs)
-    elif name == "volatility_breakout":
-        return VolatilityBreakoutStrategy(**kwargs)
-    elif name == "macd":
-        return MACDStrategy(**kwargs)
-    elif name == "bollinger":
-        return BollingerStrategy(**kwargs)
-    elif name == "score":
-        return ScoreBasedStrategy(**kwargs)
-    elif name == "ensemble":
+    if name == "ensemble":
         strategy_names = kwargs.pop("strategy_names", ["rsi", "macd", "bollinger"])
         strategies = [create_strategy(n) for n in strategy_names]
         return EnsembleStrategy(strategies=strategies)
-    raise ValueError(f"Unknown strategy: {name}")
+
+    cls = STRATEGY_REGISTRY.get(name)
+    if cls is None:
+        raise ValueError(f"Unknown strategy: {name}")
+    return cls(**kwargs)

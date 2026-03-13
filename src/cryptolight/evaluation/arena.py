@@ -92,7 +92,7 @@ class StrategyArena:
         )
         bt_result = engine.run(candles)
 
-        # Walk-Forward 검증
+        # Walk-Forward 검증 (별도 인스턴스 필요 — 내부 상태 분리)
         wf_validator = WalkForwardValidator(
             strategy=create_strategy(name, **params),
             initial_balance=self.initial_balance,
