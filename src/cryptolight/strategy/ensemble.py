@@ -10,6 +10,10 @@ class EnsembleStrategy(BaseStrategy):
     def __init__(self, strategies: list[BaseStrategy]):
         self.strategies = strategies
 
+    def get_tunable_params(self) -> dict:
+        """앙상블은 개별 전략이 아닌 하위 전략들의 조합이므로 직접 튜닝 대상 아님."""
+        return {}
+
     def required_candle_count(self) -> int:
         return max(s.required_candle_count() for s in self.strategies)
 

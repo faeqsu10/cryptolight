@@ -29,11 +29,11 @@ def explain_indicators(indicators: dict) -> str:
             desc = "하락 추세 — 매도 힘이 강함"
         lines.append(f"  MACD: {desc}")
 
-    bb_pct = indicators.get("bb_position")
-    if bb_pct is not None:
-        if bb_pct <= 0.2:
+    pct_b = indicators.get("pct_b")
+    if pct_b is not None:
+        if pct_b <= 0.2:
             desc = "밴드 하단 — 저점 근처"
-        elif bb_pct >= 0.8:
+        elif pct_b >= 0.8:
             desc = "밴드 상단 — 고점 근처"
         else:
             desc = "밴드 중간 — 보통 구간"
