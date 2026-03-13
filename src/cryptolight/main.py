@@ -89,9 +89,6 @@ def _build_strategy_instance(settings, strategy_name: str | None = None, params:
     return create_strategy(name, **strategy_params)
 
 
-def _collect_tunable_params(strategy_name: str, strategy) -> dict:
-    return strategy.get_tunable_params()
-
 
 def _load_active_strategy_parameters(repo: TradeRepository, settings, logger=None) -> dict:
     strategy_name = _get_effective_strategy_name(settings)
@@ -637,7 +634,7 @@ def _build_strategy_criteria_lines(settings) -> list[str]:
     """현재 전략의 매수/매도 기준을 사람이 읽기 쉽게 요약한다."""
     strategy_name = _get_effective_strategy_name(settings)
     strategy = _build_strategy_instance(settings, strategy_name)
-    active_params = _collect_tunable_params(strategy_name, strategy)
+    active_params = strategy.get_tunable_params()
     tuned = bool(_get_effective_strategy_params(settings, strategy_name))
     lines = ["현재 매수/매도 기준:"]
 
@@ -743,7 +740,7 @@ def _send_strategy_criteria(bot: TelegramBot, settings) -> None:
 def _build_tuning_history_lines(repo: TradeRepository, settings) -> list[str]:
     strategy_name = _get_effective_strategy_name(settings)
     strategy = _build_strategy_instance(settings, strategy_name)
-    current_params = _collect_tunable_params(strategy_name, strategy)
+    current_params = strategy.get_tunable_params()
     recent = repo.get_recent_parameter_adjustments(limit=5, strategy=strategy_name)
     latest = repo.get_latest_parameter_adjustment(strategy_name)
     next_run = "알 수 없음"
@@ -871,7 +868,7 @@ def _run_parameter_tuning(
     )
 
     current_strategy = _build_strategy_instance(settings, strategy_name)
-    current_params = _collect_tunable_params(strategy_name, current_strategy)
+    current_params = current_strategy.get_tunable_params()
     baseline = optimizer.evaluate_params(strategy_name, current_params, candles)
     result = optimizer.optimize(
         strategy_name,
