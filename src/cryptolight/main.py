@@ -204,6 +204,10 @@ def run_strategy(
             if signal_result.action == "hold":
                 _last_signals.pop(symbol, None)
 
+        # 주기 요약용 거래 수량/금액 추적
+        _snap_qty = 0.0
+        _snap_amount = 0.0
+
         # 매수 실행
         if broker and signal_result.action == "buy":
             # confidence 게이트
@@ -255,6 +259,8 @@ def run_strategy(
                     _last_signals[symbol] = "buy"
                 if _cooldown:
                     _cooldown.record_trade(symbol)
+                _snap_qty = order.quantity
+                _snap_amount = order_amount
                 logger.info("매수 체결: %s %s KRW [%s]", symbol, f"{order_amount:,.0f}", settings.trade_mode)
                 if bot:
                     coin_name = symbol.split("-")[1]
@@ -285,6 +291,8 @@ def run_strategy(
                 _sell_qty = pos.quantity
                 _sell_order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
                 if _sell_order:
+                    _snap_qty = _sell_qty
+                    _snap_amount = _sell_qty * ticker.price
                     logger.info("매도 체결: %s %.8f [%s]", symbol, pos.quantity, settings.trade_mode)
             else:
                 logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
@@ -316,6 +324,8 @@ def run_strategy(
             "regime": regime_info["regime"] if regime_info else "N/A",
             "adx": regime_info["adx"] if regime_info else 0,
             "weight": regime_info["trade_weight"] if regime_info else 1.0,
+            "trade_qty": _snap_qty,
+            "trade_amount": _snap_amount,
         }
 
         # 텔레그램 전송 (hold 제외, 음소거 시 건너뜀)
@@ -357,17 +367,17 @@ def run_strategy(
             # 이번 주기 거래 내역 구성
             cycle_trades_lines = []
             for sym, snap in _market_snapshots.items():
-                if snap["action"] == "buy":
-                    pos = broker.get_position(sym)
-                    if pos and pos.quantity > 0:
-                        cycle_trades_lines.append(
-                            f"  \U0001f7e2 <b>{sym.split('-')[1]}</b> 매수 — "
-                            f"{snap['price']:,.0f}원에 구매"
-                        )
-                elif snap["action"] == "sell":
+                if snap["action"] == "buy" and snap.get("trade_qty", 0) > 0:
+                    qty_str = f"{snap['trade_qty']:.8f}".rstrip("0").rstrip(".")
+                    cycle_trades_lines.append(
+                        f"  \U0001f7e2 <b>{sym.split('-')[1]}</b> 매수 — "
+                        f"{snap['trade_amount']:,.0f}원 / {qty_str}개 @ {snap['price']:,.0f}원"
+                    )
+                elif snap["action"] == "sell" and snap.get("trade_qty", 0) > 0:
+                    qty_str = f"{snap['trade_qty']:.8f}".rstrip("0").rstrip(".")
                     cycle_trades_lines.append(
                         f"  \U0001f534 <b>{sym.split('-')[1]}</b> 매도 — "
-                        f"{snap['price']:,.0f}원에 판매"
+                        f"{snap['trade_amount']:,.0f}원 / {qty_str}개 @ {snap['price']:,.0f}원"
                     )
 
             msg_parts = ["\U0001f4b0 <b>Paper Trading 현황</b>"]
