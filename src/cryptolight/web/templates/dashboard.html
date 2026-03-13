@@ -10,6 +10,8 @@
   --bg:#0a0e1a;--glass:rgba(255,255,255,0.05);--glass-border:rgba(255,255,255,0.08);
   --text:#e0e0e0;--text-dim:#888;--buy:#00d4aa;--sell:#ff4757;--hold:#ffa502;
   --accent:#6c5ce7;--blur:20px;
+  --tip-bg:rgba(8,11,22,0.96);--tip-border:rgba(255,255,255,0.12);
+  --tip-shadow:0 8px 32px rgba(0,0,0,0.65),0 2px 8px rgba(0,0,0,0.4);
 }
 body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;overflow-x:hidden}
 .bg-orbs{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
@@ -66,6 +68,219 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
 .pos-card{background:rgba(255,255,255,.03);border-radius:10px;padding:12px;margin-top:8px}
 .updated{font-size:.7rem;color:var(--text-dim);text-align:right;margin-top:16px}
 @media(max-width:600px){.grid{grid-template-columns:1fr}.price{font-size:1.4rem}h1{font-size:1.2rem}}
+
+/* ─── Tooltip System ─────────────────────────────────────────────────────── */
+/*
+  Architecture: .tip-wrap (position:relative) contains a .tip-btn (the ⓘ icon)
+  and a .tip-box (the floating panel). The box is hidden by default and shown
+  via :hover on the wrapper (desktop) or the [data-open] attribute (touch/keyboard).
+  z-index:200 keeps tooltips above the glassmorphism card stacking context.
+*/
+
+.tip-wrap{
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  gap:3px;
+  /* Contain the absolute-positioned tooltip box */
+}
+
+/* The ⓘ trigger button */
+.tip-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:14px;
+  height:14px;
+  border-radius:50%;
+  border:1px solid rgba(255,255,255,0.2);
+  background:rgba(255,255,255,0.05);
+  color:rgba(255,255,255,0.4);
+  font-size:9px;
+  font-weight:700;
+  font-style:normal;
+  line-height:1;
+  cursor:pointer;
+  /* Remove default button styles */
+  padding:0;
+  font-family:inherit;
+  flex-shrink:0;
+  /* Smooth state transition */
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+  /* Prevent text selection on rapid taps */
+  user-select:none;
+  -webkit-user-select:none;
+  /* Accessible focus ring */
+  outline:none;
+}
+.tip-btn:focus-visible{
+  outline:2px solid var(--accent);
+  outline-offset:2px;
+}
+.tip-btn:hover,
+.tip-wrap:hover .tip-btn,
+.tip-wrap[data-open="true"] .tip-btn{
+  background:rgba(108,92,231,0.25);
+  border-color:rgba(108,92,231,0.6);
+  color:rgba(255,255,255,0.85);
+  transform:scale(1.15);
+}
+
+/* The tooltip panel itself */
+.tip-box{
+  position:absolute;
+  /* Default position: above the trigger */
+  bottom:calc(100% + 10px);
+  left:50%;
+  transform:translateX(-50%) translateY(4px);
+  width:268px;
+  max-width:calc(100vw - 32px);
+  /* Glass-dark background — more opaque than cards for readability */
+  background:var(--tip-bg);
+  border:1px solid var(--tip-border);
+  border-radius:10px;
+  box-shadow:var(--tip-shadow);
+  backdrop-filter:blur(24px);
+  -webkit-backdrop-filter:blur(24px);
+  /* Typography */
+  font-size:.78rem;
+  line-height:1.55;
+  color:rgba(255,255,255,0.82);
+  text-align:left;
+  text-transform:none;
+  letter-spacing:0;
+  font-weight:400;
+  /* Visibility control — use visibility+opacity so CSS transitions work */
+  visibility:hidden;
+  opacity:0;
+  pointer-events:none;
+  /* Upward reveal animation */
+  transition:
+    opacity 180ms cubic-bezier(0.16,1,0.3,1),
+    transform 180ms cubic-bezier(0.16,1,0.3,1),
+    visibility 180ms;
+  /* Stack above everything */
+  z-index:200;
+}
+
+/* Arrow: CSS triangle pointing downward toward the trigger */
+.tip-box::after{
+  content:'';
+  position:absolute;
+  bottom:-6px;
+  left:50%;
+  transform:translateX(-50%);
+  width:0;height:0;
+  border-left:6px solid transparent;
+  border-right:6px solid transparent;
+  border-top:6px solid var(--tip-border);
+}
+/* Second arrow layer for the fill color (sits 1px above border-arrow) */
+.tip-box::before{
+  content:'';
+  position:absolute;
+  bottom:-5px;
+  left:50%;
+  transform:translateX(-50%);
+  width:0;height:0;
+  border-left:5px solid transparent;
+  border-right:5px solid transparent;
+  border-top:5px solid var(--tip-bg);
+  z-index:1;
+}
+
+/* Flipped variant: appears below the trigger (for elements near the top of viewport) */
+.tip-box[data-flip="true"]{
+  bottom:auto;
+  top:calc(100% + 10px);
+  transform:translateX(-50%) translateY(-4px);
+}
+.tip-box[data-flip="true"]::after{
+  bottom:auto;
+  top:-6px;
+  border-top:none;
+  border-bottom:6px solid var(--tip-border);
+}
+.tip-box[data-flip="true"]::before{
+  bottom:auto;
+  top:-5px;
+  border-top:none;
+  border-bottom:5px solid var(--tip-bg);
+}
+
+/* Show on hover (desktop) */
+@media(hover:hover){
+  .tip-wrap:hover .tip-box{
+    visibility:visible;
+    opacity:1;
+    pointer-events:auto;
+    transform:translateX(-50%) translateY(0);
+  }
+  .tip-box[data-flip="true"]:is(.tip-wrap:hover .tip-box){
+    transform:translateX(-50%) translateY(0);
+  }
+}
+
+/* Show when data-open="true" (touch/keyboard toggle) */
+.tip-wrap[data-open="true"] .tip-box{
+  visibility:visible;
+  opacity:1;
+  pointer-events:auto;
+  transform:translateX(-50%) translateY(0);
+}
+
+/* Inner layout */
+.tip-inner{
+  padding:11px 13px 11px 16px;
+  /* Colored left border — the indicator's semantic color */
+  border-left:3px solid var(--tip-accent, rgba(255,255,255,0.2));
+  border-radius:0 8px 8px 0;
+}
+.tip-title{
+  font-size:.7rem;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.8px;
+  color:var(--tip-accent, rgba(255,255,255,0.5));
+  margin-bottom:6px;
+}
+.tip-body{
+  color:rgba(255,255,255,0.78);
+  font-size:.77rem;
+  line-height:1.55;
+}
+.tip-body p{margin-bottom:5px}
+.tip-body p:last-child{margin-bottom:0}
+.tip-body ul{
+  margin:5px 0 0 0;
+  padding-left:0;
+  list-style:none;
+}
+.tip-body ul li{
+  padding:1px 0;
+  padding-left:12px;
+  position:relative;
+  color:rgba(255,255,255,0.65);
+}
+.tip-body ul li::before{
+  content:'·';
+  position:absolute;
+  left:2px;
+  color:var(--tip-accent,rgba(255,255,255,0.3));
+  font-weight:700;
+}
+.tip-body strong{
+  color:rgba(255,255,255,0.92);
+  font-weight:600;
+}
+
+/* Ensure tooltips in .meta don't get clipped by overflow:hidden on parent */
+.meta{overflow:visible}
+/* ─── End Tooltip System ─────────────────────────────────────────────────── */
 </style>
 </head>
 <body>
@@ -83,7 +298,25 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
 
   <div class="grid">
     <div class="card" id="portfolio-card">
-      <div class="card-title">Portfolio</div>
+      <div class="card-title">
+        <span class="tip-wrap" style="--tip-accent:var(--buy)">
+          Portfolio
+          <button class="tip-btn" aria-label="포트폴리오 설명" aria-expanded="false">i</button>
+          <div class="tip-box" role="tooltip">
+            <div class="tip-inner">
+              <div class="tip-title">포트폴리오</div>
+              <div class="tip-body">
+                <p>봇이 운용 중인 전체 자산 현황입니다. 초기 투입금 대비 현재 평가금액의 변동을 보여줍니다.</p>
+                <ul>
+                  <li><strong>PnL</strong> — 순수익 (수익이면 초록, 손실이면 빨강)</li>
+                  <li><strong>Equity</strong> — 현금 + 보유 코인 평가금 합계</li>
+                  <li><strong>Initial</strong> — 봇 시작 시 설정한 초기 잔고</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </span>
+      </div>
       <div class="pnl-big" id="pnl-value">--</div>
       <div class="pnl-pct" id="pnl-pct">--</div>
       <hr style="border:none;border-top:1px solid var(--glass-border);margin:12px 0">
@@ -94,12 +327,48 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
     </div>
 
     <div class="card" id="regime-card">
-      <div class="card-title">Market Regime</div>
+      <div class="card-title">
+        <span class="tip-wrap" style="--tip-accent:var(--accent)">
+          Market Regime
+          <button class="tip-btn" aria-label="시장 국면 설명" aria-expanded="false">i</button>
+          <div class="tip-box" role="tooltip">
+            <div class="tip-inner">
+              <div class="tip-title">시장 국면 (Market Regime)</div>
+              <div class="tip-body">
+                <p>현재 시장이 어떤 상태인지 분류한 값입니다. 봇은 국면에 따라 전략 강도를 조절합니다.</p>
+                <ul>
+                  <li><strong>Trending</strong> — 강한 방향성. 추세 추종에 유리</li>
+                  <li><strong>Sideways</strong> — 횡보, 저변동. 매매 신호 약화</li>
+                  <li><strong>Volatile</strong> — 고변동성. 손절 리스크 높음</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </span>
+      </div>
       <div class="regime-display">
         <div class="regime-ring" id="regime-ring"><span id="regime-icon">--</span></div>
         <div class="regime-name" id="regime-name">--</div>
         <div class="regime-desc" id="regime-desc">--</div>
-        <div class="adx-val">ADX: <span id="adx-val">--</span></div>
+        <div class="adx-val">
+          <span class="tip-wrap" style="--tip-accent:var(--accent)">
+            ADX: <span id="adx-val">--</span>
+            <button class="tip-btn" aria-label="ADX 설명" aria-expanded="false">i</button>
+            <div class="tip-box" role="tooltip">
+              <div class="tip-inner">
+                <div class="tip-title">ADX (추세 강도 지수)</div>
+                <div class="tip-body">
+                  <p>현재 추세가 얼마나 강한지를 0~100 숫자로 나타냅니다. 방향(상승/하락)과는 무관합니다.</p>
+                  <ul>
+                    <li><strong>25 미만</strong> — 추세 없음, 횡보 구간</li>
+                    <li><strong>25~50</strong> — 중간 강도 추세</li>
+                    <li><strong>50 이상</strong> — 강한 추세, 추세 전략에 유리</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </span>
+        </div>
       </div>
     </div>
   </div>
@@ -108,7 +377,35 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
     <div class="card-title">Recent Trades</div>
     <div style="overflow-x:auto">
       <table>
-        <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Amount</th><th>Reason</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Price</th>
+            <th>Amount</th>
+            <th>
+              <span class="tip-wrap" style="--tip-accent:var(--text-dim)">
+                Reason
+                <button class="tip-btn" aria-label="매매 사유 설명" aria-expanded="false">i</button>
+                <div class="tip-box" role="tooltip">
+                  <div class="tip-inner">
+                    <div class="tip-title">매매 사유 (Reason)</div>
+                    <div class="tip-body">
+                      <p>봇이 해당 주문을 낸 전략적 근거입니다. 어떤 조건이 트리거됐는지 기록됩니다.</p>
+                      <ul>
+                        <li><strong>rsi_oversold</strong> — RSI 30 이하 과매도 진입</li>
+                        <li><strong>stop_loss</strong> — 손절 라인 도달</li>
+                        <li><strong>take_profit</strong> — 익절 목표 달성</li>
+                        <li><strong>signal:buy/sell</strong> — 전략 복합 시그널</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </span>
+            </th>
+          </tr>
+        </thead>
         <tbody id="trades-body"><tr><td colspan="6" class="empty-msg">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -131,6 +428,46 @@ const rsiColor=v=>{if(v<=30)return'var(--buy)';if(v>=70)return'var(--sell)';retu
 const regimeEmoji={trending:'&#x1F4C8;',sideways:'&#x2194;&#xFE0F;',volatile:'&#x26A1;'};
 const regimeDesc={trending:'Strong directional movement',sideways:'Low volatility, range-bound',volatile:'High volatility, wide swings'};
 
+/* ─── Tooltip content definitions ──────────────────────────────────────── */
+const TIP = {
+  rsi: {
+    accent: 'var(--hold)',
+    title: 'RSI (상대강도지수)',
+    html: `<p>가격이 최근 얼마나 빠르게 오르고 내렸는지를 0~100으로 나타내는 모멘텀 지표입니다.</p>
+      <ul>
+        <li><strong>70 이상</strong> — 과매수, 하락 반전 가능성</li>
+        <li><strong>30 이하</strong> — 과매도, 반등 가능성</li>
+        <li><strong>50 근처</strong> — 중립, 방향성 탐색 중</li>
+      </ul>`
+  },
+  regime: {
+    accent: 'var(--accent)',
+    title: '시장 국면 (Regime)',
+    html: `<p>현재 시장 상태를 세 가지로 분류합니다. 봇은 국면에 따라 전략 강도와 임계값을 조정합니다.</p>
+      <ul>
+        <li><strong>trending</strong> — 뚜렷한 방향성, 추세 전략 유리</li>
+        <li><strong>sideways</strong> — 횡보, 역추세 전략 고려</li>
+        <li><strong>volatile</strong> — 급등락, 포지션 축소 권장</li>
+      </ul>`
+  },
+  signal: {
+    buy:  { accent:'var(--buy)',  title:'매수 신호 (BUY)',  html:`<p>전략이 현재 시점을 매수 기회로 판단했습니다. 여러 지표를 종합한 복합 시그널입니다.</p><ul><li>신호 강도는 confidence 점수로 확인하세요</li><li>리스크 가드를 통과한 경우에만 실제 주문이 발생합니다</li></ul>` },
+    sell: { accent:'var(--sell)', title:'매도 신호 (SELL)', html:`<p>전략이 현재 보유 포지션의 매도 시점으로 판단했습니다.</p><ul><li>손절(stop-loss) 또는 익절(take-profit) 조건 충족 시 발동</li><li>추세 반전 시그널이 복합적으로 확인된 경우에도 발생합니다</li></ul>` },
+    hold: { accent:'var(--hold)', title:'관망 신호 (HOLD)',  html:`<p>현재 시점에서 매수도 매도도 하지 않고 관망하는 상태입니다.</p><ul><li>신호 강도(confidence)가 임계값 미달이거나</li><li>시장 국면이 불분명하여 진입을 보류합니다</li></ul>` },
+  }
+};
+
+/* ─── Tooltip markup builder ────────────────────────────────────────────── */
+function tipHTML(key, sub) {
+  const cfg = sub ? TIP[key][sub] : TIP[key];
+  if (!cfg) return '';
+  const label = {
+    rsi:'RSI 설명', regime:'시장 국면 설명',
+    'signal.buy':'매수 신호 설명','signal.sell':'매도 신호 설명','signal.hold':'관망 신호 설명'
+  }[sub ? key+'.'+sub : key] || '설명';
+  return `<span class="tip-wrap" style="--tip-accent:${cfg.accent}"><button class="tip-btn" aria-label="${label}" aria-expanded="false">i</button><div class="tip-box" role="tooltip"><div class="tip-inner"><div class="tip-title">${cfg.title}</div><div class="tip-body">${cfg.html}</div></div></div></span>`;
+}
+
 async function fetchAll(){
   try{
     const opts={credentials:'same-origin'};
@@ -146,6 +483,8 @@ async function fetchAll(){
     renderStatus(status);
     renderRegime(market);
     document.getElementById('updated-at').textContent='Last updated: '+new Date().toLocaleTimeString('ko-KR');
+    // Re-bind tooltip interactions after DOM update
+    bindTooltips();
   }catch(e){console.error('Fetch error:',e)}
 }
 
@@ -158,6 +497,7 @@ function renderMarket(data){
     const rsi=d.rsi!=null?d.rsi.toFixed(1):'N/A';
     const rsiW=d.rsi!=null?Math.min(100,Math.max(0,d.rsi))+'%':'0%';
     const rc=d.rsi!=null?rsiColor(d.rsi):'var(--text-dim)';
+    const action=d.action||'hold';
     return`<div class="card">
       <div class="card-title">${esc(sym)}</div>
       <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:4px">
@@ -165,9 +505,9 @@ function renderMarket(data){
         <span class="change ${chgClass}">${chgSign}${d.change.toFixed(2)}%</span>
       </div>
       <div class="meta">
-        <span>RSI: ${rsi}</span>
-        <span>Regime: ${esc(d.regime)}</span>
-        <span class="signal-badge ${esc(d.action)}">${esc(d.action)}</span>
+        <span>${tipHTML('rsi')}RSI: ${rsi}</span>
+        <span>${tipHTML('regime')}Regime: ${esc(d.regime)}</span>
+        <span class="signal-badge ${esc(action)}">${esc(action)}${tipHTML('signal',action)}</span>
       </div>
       <div class="rsi-bar"><div class="rsi-fill" style="width:${rsiW};background:${rc}"></div></div>
     </div>`}).join('');
@@ -226,6 +566,84 @@ function renderRegime(market){
   document.getElementById('regime-desc').textContent=regimeDesc[r]||'No data';
   document.getElementById('adx-val').textContent=first.adx!=null?first.adx.toFixed(1):'--';
 }
+
+/* ─── Tooltip interaction controller ───────────────────────────────────── */
+/*
+  Strategy:
+  - Desktop (hover media query) — pure CSS handles show/hide, no JS needed.
+  - Touch / keyboard — JS toggles data-open="true" on the .tip-wrap.
+    One open tooltip at a time: opening a new one closes the previous.
+    Tapping outside any tooltip closes all.
+  - Flip detection: if the tooltip would overflow the top of the viewport,
+    data-flip="true" is set on .tip-box to render it below instead.
+*/
+let _openWrap = null;
+
+function closeAll() {
+  if (_openWrap) {
+    _openWrap.removeAttribute('data-open');
+    const btn = _openWrap.querySelector('.tip-btn');
+    if (btn) btn.setAttribute('aria-expanded','false');
+    _openWrap = null;
+  }
+}
+
+function openTip(wrap) {
+  if (_openWrap === wrap) { closeAll(); return; }
+  closeAll();
+  // Flip detection before making visible
+  const box = wrap.querySelector('.tip-box');
+  if (box) {
+    box.removeAttribute('data-flip');
+    const rect = wrap.getBoundingClientRect();
+    // Estimate tooltip height (~120px) — if not enough space above, flip
+    if (rect.top < 140) {
+      box.setAttribute('data-flip','true');
+    }
+  }
+  wrap.setAttribute('data-open','true');
+  const btn = wrap.querySelector('.tip-btn');
+  if (btn) btn.setAttribute('aria-expanded','true');
+  _openWrap = wrap;
+}
+
+function bindTooltips() {
+  // Bind all .tip-btn buttons that haven't been bound yet
+  document.querySelectorAll('.tip-btn:not([data-bound])').forEach(btn => {
+    btn.setAttribute('data-bound','1');
+    const wrap = btn.closest('.tip-wrap');
+    if (!wrap) return;
+
+    // Touch: toggle on tap
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      openTip(wrap);
+    });
+
+    // Keyboard: Enter or Space toggles
+    btn.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        openTip(wrap);
+      }
+      if (e.key === 'Escape') { closeAll(); }
+    });
+  });
+}
+
+// Close on outside tap/click
+document.addEventListener('click', e => {
+  if (_openWrap && !_openWrap.contains(e.target)) closeAll();
+});
+
+// Close on Escape anywhere
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeAll();
+});
+
+// Initial bind for static tooltips (Portfolio, Market Regime, ADX, Reason header)
+bindTooltips();
 
 fetchAll();
 setInterval(fetchAll,10000);
