@@ -158,9 +158,17 @@
 - [x] Docker 보안 강화 (non-root, cap_drop, gcc 제거)
 - [x] pytest 216개
 
+## 19단계: WebSocket 실시간 가격 모니터링 ✅
+- [x] websocket-client 의존성 추가
+- [x] enable_websocket, websocket_reconnect_max_seconds 설정
+- [x] RiskGuard _trailing_highs threading.Lock 추가
+- [x] PriceStream 구현 (daemon 스레드, 지수 백오프 재연결)
+- [x] LiveBroker _order_lock 추가 (스레드 안전)
+- [x] main.py WebSocket 스레드 + fallback pause/resume 연동
+- [x] pytest 15개 신규 (총 231개)
+
 ## 향후 과제
 - [ ] Equity curve 시각화
-- [ ] WebSocket real-time data
 - [ ] 바이낸스 거래소 지원
 - [ ] PostgreSQL 마이그레이션
 - [ ] /tune-now 수동 튜닝 명령어
