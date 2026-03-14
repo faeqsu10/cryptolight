@@ -21,7 +21,7 @@ graph LR
     style D fill:#c0392b,color:#fff
 ```
 
-## ⚡ 빠른 시작
+## 빠른 시작
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -34,14 +34,14 @@ python -m cryptolight.main
 >
 > 키 발급 방법은 [설정 가이드](docs/setup-guide.md)를 참고하세요.
 
-## ⚠️ 주의 사항
+## 주의 사항
 
 - 이 봇은 실제 자금을 거래합니다. **`TRADE_MODE=paper`에서 먼저 테스트하세요**
 - API 키가 포함된 `.env` 파일을 절대 Git에 커밋하지 마세요
 - 자동 손절이 작동하더라도 극단적 급락장에서는 손실이 발생할 수 있습니다
 - 과거 백테스트 성과는 미래 수익을 보장하지 않습니다
 
-## ⚙️ 설정
+## 설정
 
 `.env.example`을 복사하여 `.env`를 생성합니다. 필수 키 4개만 채우면 기본값으로 바로 실행 가능합니다.
 
@@ -55,8 +55,13 @@ python -m cryptolight.main
 | `TRADE_MODE` | 거래 모드 (`paper` / `live`) | `paper` |
 | `STRATEGY_NAME` | 매매 전략 | `score` |
 | `TARGET_SYMBOLS` | 대상 종목 | `KRW-BTC,KRW-ETH` |
-| `MAX_ORDER_AMOUNT_KRW` | 1회 최대 주문금액 | `50000` |
-| `SCHEDULE_INTERVAL_MINUTES` | 분석 주기 (분) | `5` |
+| `POSITION_SIZING_METHOD` | 포지션 사이징 (`fixed` / `percent` / `kelly`) | `percent` |
+| `POSITION_RISK_PCT` | percent 모드 시 총자산 대비 주문 비율 | `5.0` |
+| `STOP_LOSS_PCT` | 자동 손절 기준 | `-10.0` |
+| `TAKE_PROFIT_PCT` | 자동 익절 기준 | `15.0` |
+| `CANDLE_INTERVAL` | 캔들 주기 | `minute240` |
+| `SCHEDULE_INTERVAL_MINUTES` | 분석 주기 (분) | `60` |
+| `NOTIFICATION_LEVEL` | 알림 레벨 (`silent`/`minimal`/`normal`/`verbose`) | `normal` |
 | `ENABLE_WEB` | 웹 대시보드 | `false` |
 | `ENABLE_AUTO_PARAMETER_TUNING` | 파라미터 자동 조정 | `true` |
 | `GOOGLE_API_KEY` | Gemini AI (/ask 명령) | (선택) |
@@ -65,32 +70,34 @@ python -m cryptolight.main
 
 </details>
 
-## 🚀 실행
+## 실행
 
 ```bash
-# 스케줄러 모드 (5분마다 자동 분석)
+# 스케줄러 모드 (60분마다 자동 분석)
 python -m cryptolight.main
 
 # 1회 실행 후 종료
 python -m cryptolight.main --once
 ```
 
-## 📈 매매 전략
+## 매매 전략
 
 기본 전략은 **Score (멀티팩터 스코어)**. RSI, MACD, 볼린저밴드, 거래량 6개 팩터를 종합하여 100점 만점으로 점수화하고, 시장 국면(추세/횡보/변동)에 따라 가중치를 자동 조정한다.
 
-안전 장치: confidence 게이트(40% 미만 차단), 거래량 필터, 매수/매도 임계값 자동 튜닝(6시간마다).
+안전 장치: confidence 게이트(30% 미만 차단), 국면 가중치 게이트, 거래량 필터, 매수/매도 임계값 자동 튜닝(6시간마다).
 
 ```bash
 STRATEGY_NAME=rsi python -m cryptolight.main        # RSI 단독
 STRATEGY_NAME=macd python -m cryptolight.main       # MACD 단독
-STRATEGY_NAME=bollinger python -m cryptolight.main  # 볼린저밴드
+STRATEGY_NAME=bollinger python -m cryptolight.main  # 볼린저밴드 (평균회귀)
 STRATEGY_NAME=ensemble python -m cryptolight.main   # 다수결 앙상블
 ```
 
 전략별 상세 팩터 점수 및 국면 가중치는 [전략 상세](docs/strategy.md)를 참고.
 
-## 🤖 텔레그램 명령어
+## 텔레그램 알림
+
+### 명령어
 
 | 명령어 | 설명 |
 |--------|------|
@@ -103,7 +110,20 @@ STRATEGY_NAME=ensemble python -m cryptolight.main   # 다수결 앙상블
 | `/mute` / `/unmute` | 자동 알림 끄기/켜기 |
 | `/stop` | 긴급 거래 중지 (킬스위치) |
 
-## 📊 웹 대시보드
+### 알림 레벨
+
+`NOTIFICATION_LEVEL` 환경변수로 알림 상세도를 조절합니다.
+
+| 레벨 | 받는 알림 |
+|------|----------|
+| `silent` | 킬스위치, 에러만 |
+| `minimal` | + 매수/매도 체결, 손절/익절 |
+| `normal` | + 일일 요약, 시작/종료 알림 |
+| `verbose` | + 시그널, 주기 현황, 매수 차단 |
+
+체결/손절/익절 알림에는 매수평단, 수량, 손익률, 손익금액이 포함됩니다.
+
+## 웹 대시보드
 
 글래스모피즘 디자인의 실시간 모니터링 대시보드.
 
@@ -114,29 +134,41 @@ ENABLE_WEB=true WEB_PORT=8090 python -m cryptolight.main
 
 종목별 가격/RSI/시그널, 포트폴리오 손익, 시장 국면, 거래 내역을 한눈에 확인. HTTP Basic Auth 지원 (`WEB_USERNAME`, `WEB_PASSWORD` 설정).
 
-## 🧪 백테스트
+## 백테스트
 
 ```bash
 python -m cryptolight.backtest --symbol KRW-BTC --strategy score --days 365
 python -m cryptolight.backtest --symbol KRW-BTC --strategy score --days 365 --walk-forward
 ```
 
-## 🛡️ 리스크 관리
+## 리스크 관리
 
+- 포지션 사이징: 총자산의 N% 기반 (confidence 연동)
 - 1회 최대 주문 금액 + Live 하드캡 (50만원)
 - 일일 손실 한도 초과 시 매수 자동 차단
-- 자동 손절/익절/트레일링 스톱
+- 자동 손절(-10%)/익절(+15%)/트레일링 스톱
+- 국면 가중치 게이트 (저품질 국면에서 매수 차단)
 - 동시 보유 종목 수 제한 + 매매 쿨다운
 - 중복 시그널 방지
 - API 장애 시 지수 백오프 (주문 API는 재시도 안 함)
 
-## 🔄 자기개선 루프
+## 자기개선 루프
 
-성과 평가 → 전략 경쟁(Arena) → 자동 전환/롤백 → 파라미터 미세조정을 주기적으로 실행. 텔레그램으로 무엇이 왜 바뀌었는지 초보자용 설명과 함께 알림.
+성과 평가 -> 전략 경쟁(Arena) -> 자동 전환/롤백 -> 파라미터 미세조정을 주기적으로 실행. 텔레그램으로 무엇이 왜 바뀌었는지 초보자용 설명과 함께 알림.
 
 상세 내용은 [전략 상세](docs/strategy.md#자기개선-루프)를 참고.
 
-## 🐳 배포
+## 보안
+
+- `.env` 파일은 `.gitignore`에 포함되어 절대 커밋되지 않습니다
+- API 키는 환경변수로만 관리 (코드에 하드코딩 금지)
+- 웹 대시보드는 `127.0.0.1`에만 바인딩 (외부 노출 차단)
+- 웹 대시보드 API에 민감 정보(API 키 등) 미노출
+- CSP 헤더, XSS 방어, OpenAPI 문서 비활성화
+- 주문 API 실패 시 재시도하지 않음 (중복 주문 방지)
+- JWT 토큰은 매 요청마다 새로 생성 (재사용 없음)
+
+## 배포
 
 ```bash
 # Docker
@@ -148,7 +180,7 @@ systemctl --user status cryptolight.service
 
 상세 배포 가이드는 [배포 문서](docs/deployment.md)를 참고.
 
-## 🧑‍💻 개발
+## 개발
 
 ```bash
 pytest                # 전체 테스트 (216개)

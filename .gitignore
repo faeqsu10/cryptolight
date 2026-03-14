@@ -23,3 +23,7 @@ logs/
 
 # 데이터
 data/
+
+# Claude / OMC (세션 데이터, 플러그인 상태)
+.claude/
+.omc/
