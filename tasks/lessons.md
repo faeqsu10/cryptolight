@@ -2,6 +2,12 @@
 
 이 파일은 개발 과정에서 배운 교훈을 기록하여 같은 실수를 반복하지 않기 위한 것이다.
 
+## 봇 실행/재시작
+
+- **반드시 `systemctl --user restart cryptolight`로 재시작**: systemd 서비스가 `enabled` + `Restart=always`로 설정되어 있어서 `nohup`으로 수동 실행하면 이중 실행 발생.
+- 이중 실행 시 텔레그램 long polling 409 Conflict 에러로 명령어 폴링이 영구 실패한다.
+- 로그 확인: `journalctl --user -u cryptolight -f`
+
 ## 스레드 안전성
 
 - **공유 상태에 Lock 필수**: WebSocket 스레드와 스케줄러 스레드가 동시에 `_trailing_highs`, 주문 API를 접근할 수 있다. 공유 mutable 상태에는 반드시 `threading.Lock()`을 추가할 것.
