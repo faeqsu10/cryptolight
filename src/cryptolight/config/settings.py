@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     # 스케줄러
     schedule_interval_minutes: int = 60
+    price_monitor_interval_minutes: int = 5  # 손절/익절 가격 모니터링 주기
     command_poll_seconds: int = 5
     paper_initial_balance: float = 1_000_000
     db_path: str = "data/trades.db"

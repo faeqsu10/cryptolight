@@ -369,6 +369,8 @@ def run_strategy(
             "weight": regime_info["trade_weight"] if regime_info else 1.0,
             "trade_qty": _snap_qty,
             "trade_amount": _snap_amount,
+            "indicators": signal_result.indicators,
+            "confidence": signal_result.confidence,
         }
 
         # 텔레그램 시그널 전송 (hold 제외, 체결 완료 종목 제외, 음소거 시 건너뜀)
@@ -452,6 +454,63 @@ def strategy_job(
         logger.exception("전략 실행 중 에러 발생 — 이번 주기 스킵")
         if _health:
             _health.record_failure()
+
+
+def price_monitor_job(
+    client: UpbitClient,
+    bot: TelegramBot | None,
+    broker: BaseBroker | None,
+    risk_guard: RiskGuard | None,
+    symbols: list[str],
+):
+    """5분마다 보유 종목 가격을 확인하여 손절/익절/트레일링 스톱을 체크한다."""
+    if not broker or not risk_guard:
+        return
+
+    for symbol in symbols:
+        pos = broker.get_position(symbol)
+        if not pos or pos.quantity <= 0 or pos.avg_price <= 0:
+            continue
+
+        try:
+            ticker = client.get_ticker(symbol)
+        except Exception:
+            logger.warning("가격 모니터링 조회 실패: %s", symbol)
+            continue
+
+        sl_tp = risk_guard.check_stop_loss_take_profit(
+            symbol, pos.avg_price, pos.quantity, ticker.price,
+        )
+        if not sl_tp:
+            continue
+
+        _avg = pos.avg_price
+        _qty = pos.quantity
+        _pnl_pct = (ticker.price - _avg) / _avg * 100
+        _pnl_krw = (ticker.price - _avg) * _qty
+        _proceeds = ticker.price * _qty
+        _qty_str = f"{_qty:.8f}".rstrip("0").rstrip(".")
+
+        trigger_labels = {
+            "stop_loss": ("\U0001f534", "손절 매도", "손절 트리거"),
+            "take_profit": ("\U0001f7e2", "익절 매도", "익절 트리거"),
+            "trailing_stop": ("\U0001f7e1", "트레일링 스톱", "트레일링 스톱"),
+        }
+        emoji, label, reason = trigger_labels[sl_tp]
+
+        order = broker.sell_market(symbol, _qty, ticker.price, reason=reason)
+        if order:
+            logger.warning("%s 실행: %s %.8f @ %s", label, symbol, _qty, f"{ticker.price:,.0f}")
+            if bot:
+                bot.send_message(
+                    f"{emoji} <b>{label}</b>\n"
+                    f"종목: {symbol}\n"
+                    f"매도금액: {_proceeds:,.0f} KRW\n"
+                    f"체결가격: {ticker.price:,.0f} KRW\n"
+                    f"매수평단: {_avg:,.0f} KRW\n"
+                    f"수량: {_qty_str}개\n"
+                    f"손익: {_pnl_krw:+,.0f} KRW ({_pnl_pct:+.1f}%)"
+                )
 
 
 def daily_summary_job(
@@ -1298,7 +1357,7 @@ def main():
         return
 
     # ── 스케줄러 모드 ──
-    logger.info("스케줄러 모드: %d분 간격", settings.schedule_interval_minutes)
+    logger.info("스케줄러 모드: 전략 분석 %d분 / 가격 모니터링 %d분", settings.schedule_interval_minutes, settings.price_monitor_interval_minutes)
     scheduler = BlockingScheduler(timezone=settings.app_timezone)
     global _scheduler
     _scheduler = scheduler
@@ -1313,6 +1372,19 @@ def main():
         id="strategy",
         next_run_time=None,  # 첫 실행은 아래에서 즉시 수행
     )
+
+    # 가격 모니터링: 손절/익절/트레일링 스톱을 짧은 주기로 체크
+    if broker and risk_guard and settings.price_monitor_interval_minutes > 0:
+        scheduler.add_job(
+            price_monitor_job,
+            "interval",
+            minutes=settings.price_monitor_interval_minutes,
+            max_instances=1,
+            misfire_grace_time=30,
+            args=[client, bot, broker, risk_guard, symbols],
+            id="price_monitor",
+        )
+        logger.info("가격 모니터링: %d분 간격 (손절/익절 체크)", settings.price_monitor_interval_minutes)
 
     # 명령어 폴링: 전용 스레드에서 long polling (즉시 응답)
     cmd_stop_event = threading.Event()
