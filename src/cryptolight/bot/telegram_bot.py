@@ -11,12 +11,26 @@ ACTION_EMOJI = {"buy": "\U0001f7e2", "sell": "\U0001f534", "hold": "\u26aa"}
 ACTION_LABEL = {"buy": "매수 시그널", "sell": "매도 시그널", "hold": "관망"}
 
 
+# 알림 레벨별 허용 이벤트
+_LEVEL_EVENTS: dict[str, set[str]] = {
+    "silent": {"killswitch", "error"},
+    "minimal": {"killswitch", "error", "execution", "stop_trigger"},
+    "normal": {"killswitch", "error", "execution", "stop_trigger", "daily_summary", "startup", "shutdown"},
+    "verbose": {"killswitch", "error", "execution", "stop_trigger", "daily_summary", "startup", "shutdown", "signal", "cycle_summary", "risk_blocked", "tuning", "screening"},
+}
+
+
 class TelegramBot:
-    def __init__(self, token: str, chat_id: str):
+    def __init__(self, token: str, chat_id: str, notification_level: str = "normal"):
         self._token = token
         self._chat_id = chat_id
         self._base_url = f"https://api.telegram.org/bot{token}"
         self._client = httpx.Client(timeout=10.0)
+        self._notification_level = notification_level
+
+    def should_notify(self, event_type: str) -> bool:
+        allowed = _LEVEL_EVENTS.get(self._notification_level, _LEVEL_EVENTS["normal"])
+        return event_type in allowed
 
     def send_message(self, text: str) -> bool:
         try:

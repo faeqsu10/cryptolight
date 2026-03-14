@@ -131,7 +131,7 @@ def run_strategy(
         )
 
         # 급등/급락 알림 (음소거 시 건너뜀)
-        if bot and abs(ticker.change_rate) >= settings.surge_alert_threshold:
+        if bot and abs(ticker.change_rate) >= settings.surge_alert_threshold and bot.should_notify("signal"):
             if not (_cmd_handler and _cmd_handler.muted):
                 bot.send_surge_alert(symbol, ticker.price, ticker.change_rate)
 
@@ -275,7 +275,7 @@ def run_strategy(
                 )
                 if not check.allowed:
                     logger.warning("매수 차단: %s — %s", symbol, check.reason)
-                    if bot:
+                    if bot and bot.should_notify("risk_blocked"):
                         bot.send_message(f"\u26a0\ufe0f <b>매수 차단</b>\n{symbol}: {check.reason}")
                     continue
 
@@ -373,7 +373,7 @@ def run_strategy(
 
         # 텔레그램 시그널 전송 (hold 제외, 체결 완료 종목 제외, 음소거 시 건너뜀)
         _already_executed = _snap_qty > 0  # 이번 주기에 체결된 종목이면 중복 알림 방지
-        if bot and signal_result.action != "hold" and not _already_executed:
+        if bot and signal_result.action != "hold" and not _already_executed and bot.should_notify("signal"):
             if not (_cmd_handler and _cmd_handler.muted):
                 bot.send_signal(signal_result, price=ticker.price)
             else:
@@ -425,7 +425,7 @@ def run_strategy(
                     )
 
             # 거래가 있었을 때만 현황 전송 (hold-only 주기는 생략)
-            if cycle_trades_lines:
+            if cycle_trades_lines and bot.should_notify("cycle_summary"):
                 msg_parts = ["\U0001f4b0 <b>Paper Trading 현황</b>"]
                 msg_parts.append("\n\U0001f4dd <b>이번 주기 거래</b>")
                 msg_parts.extend(cycle_trades_lines)
@@ -1145,7 +1145,7 @@ def main():
     bot = None
     cmd_handler = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
-        bot = TelegramBot(settings.telegram_bot_token, settings.telegram_chat_id)
+        bot = TelegramBot(settings.telegram_bot_token, settings.telegram_chat_id, notification_level=settings.notification_level)
         global _cmd_handler
         cmd_handler = CommandHandler(
             settings.telegram_bot_token,
