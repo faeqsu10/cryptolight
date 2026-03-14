@@ -57,11 +57,13 @@ class HealthMonitor:
                 return False
         return True
 
-    def summary_text(self) -> str:
+    def summary_text(self, schedule_interval_minutes: int = 60) -> str:
         status = self.get_status()
         uptime_min = status.uptime_seconds / 60
+        # max_idle를 전략 실행 주기의 2배 + 여유 120초로 설정
+        max_idle = schedule_interval_minutes * 60 * 2 + 120
         lines = [
-            f"상태: {'정상' if self.is_healthy() else '이상'}",
+            f"상태: {'정상' if self.is_healthy(max_idle_seconds=max_idle) else '이상'}",
             f"가동 시간: {uptime_min:.0f}분",
             f"총 실행: {status.total_cycles}회",
             f"연속 에러: {status.consecutive_errors}회",

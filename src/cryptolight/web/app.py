@@ -145,6 +145,8 @@ async def api_market(_: None = Depends(verify_credentials)):
             "action": snap.get("action", "hold"),
             "regime": snap.get("regime", "N/A"),
             "adx": round(snap.get("adx", 0), 1),
+            "confidence": round(snap.get("confidence", 0), 2) if snap.get("confidence") is not None else 0,
+            "indicators": snap.get("indicators", {}),
         }
     return result
 
@@ -222,7 +224,7 @@ async def api_status(_: None = Depends(verify_credentials)):
             "uptime_minutes": round(status.uptime_seconds / 60, 1),
             "total_cycles": status.total_cycles,
             "consecutive_errors": status.consecutive_errors,
-            "healthy": health.is_healthy(),
+            "healthy": health.is_healthy(max_idle_seconds=settings.schedule_interval_minutes * 60 * 2 + 120),
         }
 
     return {

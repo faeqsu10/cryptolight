@@ -1230,7 +1230,7 @@ def command_loop(
                 daily_summary_job(bot, broker, repo, client, symbols)
                 cmd_handler.reset_report()
             if cmd_handler.status_requested and bot:
-                status_text = _health.summary_text() if _health else "헬스 모니터 미초기화"
+                status_text = _health.summary_text(schedule_interval_minutes=settings.schedule_interval_minutes) if _health else "헬스 모니터 미초기화"
                 bot.send_message(f"\U0001f4cb <b>봇 상태</b>\n<pre>{status_text}</pre>")
                 cmd_handler.reset_status()
             if cmd_handler.info_requested and bot and settings:
