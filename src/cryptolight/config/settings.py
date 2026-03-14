@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"  # Gemini 모델명
     ask_daily_limit: int = 10  # /ask 일일 사용 제한
 
+    # WebSocket 실시간 가격 모니터링
+    enable_websocket: bool = True
+    websocket_reconnect_max_seconds: int = 60
+
     # 웹 대시보드
     enable_web: bool = False
     web_host: str = "127.0.0.1"

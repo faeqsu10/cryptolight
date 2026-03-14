@@ -1,6 +1,7 @@
 """실거래 브로커 — 업비트 실주문 실행 (리스크 가드 필수)"""
 
 import logging
+import threading
 import time
 
 from cryptolight.exchange.base import OrderResult
@@ -26,6 +27,7 @@ class LiveBroker(BaseBroker):
         self._repo = repo
         self.absolute_max_order_krw = absolute_max_order_krw
         self.commission_rate = commission_rate
+        self._order_lock = threading.Lock()
 
     def _verify_order(self, order: OrderResult, max_retries: int = 3) -> OrderResult:
         """주문 체결 상태를 확인한다. done/cancel 될 때까지 재조회."""
@@ -50,61 +52,63 @@ class LiveBroker(BaseBroker):
             )
             return None
 
-        try:
-            order = self._client.buy_market(symbol, amount_krw)
-            logger.info("[LIVE 매수] %s %s KRW — 주문ID: %s", symbol, f"{amount_krw:,.0f}", order.order_id)
+        with self._order_lock:
+            try:
+                order = self._client.buy_market(symbol, amount_krw)
+                logger.info("[LIVE 매수] %s %s KRW — 주문ID: %s", symbol, f"{amount_krw:,.0f}", order.order_id)
 
-            # 주문 체결 확인
-            verified = self._verify_order(order)
-            if verified.state == "cancel":
-                logger.warning("매수 주문 취소됨: %s", order.order_id)
+                # 주문 체결 확인
+                verified = self._verify_order(order)
+                if verified.state == "cancel":
+                    logger.warning("매수 주문 취소됨: %s", order.order_id)
+                    return None
+
+                # 체결 정보 사용 (가능 시), 아니면 추정치
+                actual_price = verified.price or current_price
+                actual_qty = verified.quantity or (amount_krw / current_price)
+                commission = amount_krw * self.commission_rate
+
+                if self._repo:
+                    trade = TradeRecord(
+                        symbol=symbol, side="buy", price=actual_price,
+                        quantity=actual_qty, amount_krw=amount_krw,
+                        commission=commission, reason=reason, strategy=strategy,
+                    )
+                    self._repo.save_trade(trade)
+
+                return verified
+            except Exception:
+                logger.exception("매수 주문 실패: %s", symbol)
                 return None
-
-            # 체결 정보 사용 (가능 시), 아니면 추정치
-            actual_price = verified.price or current_price
-            actual_qty = verified.quantity or (amount_krw / current_price)
-            commission = amount_krw * self.commission_rate
-
-            if self._repo:
-                trade = TradeRecord(
-                    symbol=symbol, side="buy", price=actual_price,
-                    quantity=actual_qty, amount_krw=amount_krw,
-                    commission=commission, reason=reason, strategy=strategy,
-                )
-                self._repo.save_trade(trade)
-
-            return verified
-        except Exception:
-            logger.exception("매수 주문 실패: %s", symbol)
-            return None
 
     def sell_market(self, symbol: str, quantity: float, current_price: float, reason: str = "", strategy: str = "") -> OrderResult | None:
-        try:
-            order = self._client.sell_market(symbol, quantity)
-            logger.info("[LIVE 매도] %s %.8f — 주문ID: %s", symbol, quantity, order.order_id)
+        with self._order_lock:
+            try:
+                order = self._client.sell_market(symbol, quantity)
+                logger.info("[LIVE 매도] %s %.8f — 주문ID: %s", symbol, quantity, order.order_id)
 
-            # 주문 체결 확인
-            verified = self._verify_order(order)
-            if verified.state == "cancel":
-                logger.warning("매도 주문 취소됨: %s", order.order_id)
+                # 주문 체결 확인
+                verified = self._verify_order(order)
+                if verified.state == "cancel":
+                    logger.warning("매도 주문 취소됨: %s", order.order_id)
+                    return None
+
+                actual_price = verified.price or current_price
+                proceeds = quantity * actual_price
+                commission = proceeds * self.commission_rate
+
+                if self._repo:
+                    trade = TradeRecord(
+                        symbol=symbol, side="sell", price=actual_price,
+                        quantity=quantity, amount_krw=proceeds,
+                        commission=commission, reason=reason, strategy=strategy,
+                    )
+                    self._repo.save_trade(trade)
+
+                return verified
+            except Exception:
+                logger.exception("매도 주문 실패: %s", symbol)
                 return None
-
-            actual_price = verified.price or current_price
-            proceeds = quantity * actual_price
-            commission = proceeds * self.commission_rate
-
-            if self._repo:
-                trade = TradeRecord(
-                    symbol=symbol, side="sell", price=actual_price,
-                    quantity=quantity, amount_krw=proceeds,
-                    commission=commission, reason=reason, strategy=strategy,
-                )
-                self._repo.save_trade(trade)
-
-            return verified
-        except Exception:
-            logger.exception("매도 주문 실패: %s", symbol)
-            return None
 
     def get_balance_krw(self) -> float:
         """업비트에서 현금 잔고를 조회한다."""

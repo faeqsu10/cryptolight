@@ -15,6 +15,7 @@ from cryptolight.bot.telegram_bot import TelegramBot
 from cryptolight.config import get_settings
 from cryptolight.exchange.candle_cache import CandleCache
 from cryptolight.health import HealthMonitor
+from cryptolight.market.price_stream import PriceStream
 from cryptolight.market.regime import MarketRegime
 from cryptolight.strategy.volume_filter import VolumeFilter
 from cryptolight.exchange.upbit import UpbitClient
@@ -66,6 +67,7 @@ _market_snapshots: dict[str, dict] = {}
 _ai_assistant: AIAssistant | None = None
 _cmd_handler: CommandHandler | None = None
 _scheduler: BlockingScheduler | None = None
+_price_stream: PriceStream | None = None
 _active_strategy_name: str = ""  # HIGH-1: mutable 전략명 (자기개선 루프에서 전환)
 _active_strategy_params: dict = {}  # 자동 조정된 활성 전략 파라미터
 
@@ -511,6 +513,75 @@ def price_monitor_job(
                     f"수량: {_qty_str}개\n"
                     f"손익: {_pnl_krw:+,.0f} KRW ({_pnl_pct:+.1f}%)"
                 )
+
+
+def _make_ws_price_callback(
+    broker: BaseBroker,
+    risk_guard: RiskGuard,
+    bot: TelegramBot | None,
+):
+    """WebSocket 가격 수신 시 손절/익절을 즉시 체크하는 콜백을 생성한다."""
+
+    def on_price(symbol: str, price: float, data: dict):
+        pos = broker.get_position(symbol)
+        if not pos or pos.quantity <= 0 or pos.avg_price <= 0:
+            return
+
+        sl_tp = risk_guard.check_stop_loss_take_profit(
+            symbol, pos.avg_price, pos.quantity, price,
+        )
+        if not sl_tp:
+            return
+
+        _avg = pos.avg_price
+        _qty = pos.quantity
+        _pnl_pct = (price - _avg) / _avg * 100
+        _pnl_krw = (price - _avg) * _qty
+        _proceeds = price * _qty
+        _qty_str = f"{_qty:.8f}".rstrip("0").rstrip(".")
+
+        trigger_labels = {
+            "stop_loss": ("\U0001f534", "손절 매도", "손절 트리거(WS)"),
+            "take_profit": ("\U0001f7e2", "익절 매도", "익절 트리거(WS)"),
+            "trailing_stop": ("\U0001f7e1", "트레일링 스톱", "트레일링 스톱(WS)"),
+        }
+        emoji, label, reason = trigger_labels[sl_tp]
+
+        order = broker.sell_market(symbol, _qty, price, reason=reason)
+        if order:
+            logger.warning("[WS] %s 실행: %s %.8f @ %s", label, symbol, _qty, f"{price:,.0f}")
+            if bot:
+                bot.send_message(
+                    f"{emoji} <b>{label}</b> (실시간)\n"
+                    f"종목: {symbol}\n"
+                    f"매도금액: {_proceeds:,.0f} KRW\n"
+                    f"체결가격: {price:,.0f} KRW\n"
+                    f"매수평단: {_avg:,.0f} KRW\n"
+                    f"수량: {_qty_str}개\n"
+                    f"손익: {_pnl_krw:+,.0f} KRW ({_pnl_pct:+.1f}%)"
+                )
+
+    return on_price
+
+
+def _ws_on_connect():
+    """WebSocket 연결 성공 시 폴링 job 일시 정지."""
+    if _scheduler:
+        try:
+            _scheduler.pause_job("price_monitor")
+            logger.info("WebSocket 연결됨 — price_monitor 폴링 일시 정지")
+        except Exception:
+            pass
+
+
+def _ws_on_disconnect():
+    """WebSocket 연결 끊김 시 폴링 job 재개."""
+    if _scheduler:
+        try:
+            _scheduler.resume_job("price_monitor")
+            logger.warning("WebSocket 끊김 — price_monitor 폴링 재개")
+        except Exception:
+            pass
 
 
 def daily_summary_job(
@@ -1386,6 +1457,20 @@ def main():
         )
         logger.info("가격 모니터링: %d분 간격 (손절/익절 체크)", settings.price_monitor_interval_minutes)
 
+    # ── WebSocket 실시간 가격 스트림 ──
+    global _price_stream
+    if broker and risk_guard and settings.enable_websocket:
+        ws_callback = _make_ws_price_callback(broker, risk_guard, bot)
+        _price_stream = PriceStream(
+            symbols=symbols,
+            on_price_callback=ws_callback,
+            on_connect=_ws_on_connect,
+            on_disconnect=_ws_on_disconnect,
+            reconnect_max_seconds=settings.websocket_reconnect_max_seconds,
+        )
+        _price_stream.start()
+        logger.info("WebSocket 실시간 가격 스트림 활성화 (fallback: %d분 폴링)", settings.price_monitor_interval_minutes)
+
     # 명령어 폴링: 전용 스레드에서 long polling (즉시 응답)
     cmd_stop_event = threading.Event()
     if cmd_handler:
@@ -1485,6 +1570,8 @@ def main():
     finally:
         logger.info("스케줄러 종료 — 리소스 정리")
         _scheduler = None
+        if _price_stream:
+            _price_stream.stop()
         if _ai_assistant:
             _ai_assistant.close()
         if bot:
