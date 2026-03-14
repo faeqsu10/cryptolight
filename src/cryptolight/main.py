@@ -151,23 +151,59 @@ def run_strategy(
                 if sl_tp == "stop_loss":
                     order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="손절 트리거")
                     if order:
+                        _sl_pnl_pct = (ticker.price - _sl_avg_price) / _sl_avg_price * 100 if _sl_avg_price else 0
+                        _sl_pnl_krw = (ticker.price - _sl_avg_price) * _sl_quantity
+                        _sl_proceeds = ticker.price * _sl_quantity
+                        _sl_qty_str = f"{_sl_quantity:.8f}".rstrip("0").rstrip(".")
                         logger.warning("손절 매도 실행: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
                         if bot:
-                            bot.send_message(f"\U0001f534 <b>손절 매도</b>\n{symbol} @ {ticker.price:,.0f} KRW")
+                            bot.send_message(
+                                f"\U0001f534 <b>손절 매도</b>\n"
+                                f"종목: {symbol}\n"
+                                f"매도금액: {_sl_proceeds:,.0f} KRW\n"
+                                f"체결가격: {ticker.price:,.0f} KRW\n"
+                                f"매수평단: {_sl_avg_price:,.0f} KRW\n"
+                                f"수량: {_sl_qty_str}개\n"
+                                f"손익: {_sl_pnl_krw:+,.0f} KRW ({_sl_pnl_pct:+.1f}%)"
+                            )
                     continue
                 elif sl_tp == "take_profit":
                     order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="익절 트리거")
                     if order:
+                        _tp_pnl_pct = (ticker.price - _sl_avg_price) / _sl_avg_price * 100 if _sl_avg_price else 0
+                        _tp_pnl_krw = (ticker.price - _sl_avg_price) * _sl_quantity
+                        _tp_proceeds = ticker.price * _sl_quantity
+                        _tp_qty_str = f"{_sl_quantity:.8f}".rstrip("0").rstrip(".")
                         logger.info("익절 매도 실행: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
                         if bot:
-                            bot.send_message(f"\U0001f7e2 <b>익절 매도</b>\n{symbol} @ {ticker.price:,.0f} KRW")
+                            bot.send_message(
+                                f"\U0001f7e2 <b>익절 매도</b>\n"
+                                f"종목: {symbol}\n"
+                                f"매도금액: {_tp_proceeds:,.0f} KRW\n"
+                                f"체결가격: {ticker.price:,.0f} KRW\n"
+                                f"매수평단: {_sl_avg_price:,.0f} KRW\n"
+                                f"수량: {_tp_qty_str}개\n"
+                                f"손익: {_tp_pnl_krw:+,.0f} KRW ({_tp_pnl_pct:+.1f}%)"
+                            )
                     continue
                 elif sl_tp == "trailing_stop":
                     order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="트레일링 스톱")
                     if order:
+                        _ts_pnl_pct = (ticker.price - _sl_avg_price) / _sl_avg_price * 100 if _sl_avg_price else 0
+                        _ts_pnl_krw = (ticker.price - _sl_avg_price) * _sl_quantity
+                        _ts_proceeds = ticker.price * _sl_quantity
+                        _ts_qty_str = f"{_sl_quantity:.8f}".rstrip("0").rstrip(".")
                         logger.warning("트레일링 스톱 매도: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
                         if bot:
-                            bot.send_message(f"\U0001f7e1 <b>트레일링 스톱</b>\n{symbol} @ {ticker.price:,.0f} KRW")
+                            bot.send_message(
+                                f"\U0001f7e1 <b>트레일링 스톱</b>\n"
+                                f"종목: {symbol}\n"
+                                f"매도금액: {_ts_proceeds:,.0f} KRW\n"
+                                f"체결가격: {ticker.price:,.0f} KRW\n"
+                                f"매수평단: {_sl_avg_price:,.0f} KRW\n"
+                                f"수량: {_ts_qty_str}개\n"
+                                f"손익: {_ts_pnl_krw:+,.0f} KRW ({_ts_pnl_pct:+.1f}%)"
+                            )
                     continue
 
         # 시장 국면 감지
@@ -243,13 +279,15 @@ def run_strategy(
                         bot.send_message(f"\u26a0\ufe0f <b>매수 차단</b>\n{symbol}: {check.reason}")
                     continue
 
-            # 포지션 사이징 (시장 국면 가중치 반영)
+            # 국면 가중치 게이트 (임계값 미만이면 매수 차단, 매도는 의도적 제외)
+            if regime_info and regime_info["trade_weight"] < settings.min_trade_weight:
+                logger.info("국면 가중치 미달 차단: %s weight=%.2f < %.2f", symbol, regime_info["trade_weight"], settings.min_trade_weight)
+                continue
+
+            # 포지션 사이징 (confidence 기반, trade_weight 감쇠 제거)
             if _position_sizer:
                 equity = broker.get_equity({symbol: ticker.price})
-                confidence = signal_result.confidence
-                if regime_info:
-                    confidence *= regime_info["trade_weight"]
-                order_amount = _position_sizer.calculate(equity, confidence)
+                order_amount = _position_sizer.calculate(equity, signal_result.confidence)
             else:
                 order_amount = settings.max_order_amount_krw
 
@@ -285,10 +323,12 @@ def run_strategy(
                 )
                 continue
             _sell_qty = 0.0
+            _sell_avg_price = 0.0
             _sell_order = None
             pos = broker.get_position(symbol)
             if pos:
                 _sell_qty = pos.quantity
+                _sell_avg_price = pos.avg_price
                 _sell_order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
                 if _sell_order:
                     _snap_qty = _sell_qty
@@ -304,15 +344,18 @@ def run_strategy(
                 coin_name = symbol.split("-")[1]
                 qty_str = f"{_sell_qty:.8f}".rstrip("0").rstrip(".")
                 proceeds = _sell_qty * ticker.price
+                _sell_pnl_pct = (ticker.price - _sell_avg_price) / _sell_avg_price * 100 if _sell_avg_price else 0
+                _sell_pnl_krw = (ticker.price - _sell_avg_price) * _sell_qty
                 explain = explain_indicators(signal_result.indicators)
                 bot.send_message(
                     f"\U0001f534 <b>매도 체결</b>\n"
                     f"종목: {symbol} ({coin_name})\n"
                     f"매도금액: {proceeds:,.0f} KRW\n"
                     f"체결가격: {ticker.price:,.0f} KRW\n"
+                    f"매수평단: {_sell_avg_price:,.0f} KRW\n"
                     f"매도수량: {qty_str}개\n"
-                    f"사유: {signal_result.reason}\n"
-                    f"\n<b>지표 해설</b>\n<pre>{html_mod.escape(explain)}</pre>"
+                    f"손익: {_sell_pnl_krw:+,.0f} KRW ({_sell_pnl_pct:+.1f}%)\n"
+                    f"사유: {signal_result.reason}"
                 )
 
         # 시장 상태 수집 (텔레그램 요약용)
@@ -328,8 +371,9 @@ def run_strategy(
             "trade_amount": _snap_amount,
         }
 
-        # 텔레그램 전송 (hold 제외, 음소거 시 건너뜀)
-        if bot and signal_result.action != "hold":
+        # 텔레그램 시그널 전송 (hold 제외, 체결 완료 종목 제외, 음소거 시 건너뜀)
+        _already_executed = _snap_qty > 0  # 이번 주기에 체결된 종목이면 중복 알림 방지
+        if bot and signal_result.action != "hold" and not _already_executed:
             if not (_cmd_handler and _cmd_handler.muted):
                 bot.send_signal(signal_result, price=ticker.price)
             else:
@@ -380,13 +424,14 @@ def run_strategy(
                         f"{snap['trade_amount']:,.0f}원 / {qty_str}개 @ {snap['price']:,.0f}원"
                     )
 
-            msg_parts = ["\U0001f4b0 <b>Paper Trading 현황</b>"]
+            # 거래가 있었을 때만 현황 전송 (hold-only 주기는 생략)
             if cycle_trades_lines:
+                msg_parts = ["\U0001f4b0 <b>Paper Trading 현황</b>"]
                 msg_parts.append("\n\U0001f4dd <b>이번 주기 거래</b>")
                 msg_parts.extend(cycle_trades_lines)
-            msg_parts.append(f"\n<pre>{html_mod.escape(summary)}</pre>")
-            msg_parts.append(f"\n\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(market_text)}</pre>")
-            bot.send_message("\n".join(msg_parts))
+                msg_parts.append(f"\n<pre>{html_mod.escape(summary)}</pre>")
+                msg_parts.append(f"\n\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(market_text)}</pre>")
+                bot.send_message("\n".join(msg_parts))
 
 
 def strategy_job(

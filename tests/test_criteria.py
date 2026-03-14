@@ -17,7 +17,7 @@ def test_score_criteria_includes_beginner_explanations():
         assert "RSI: 최근 상승/하락 힘" in text
         assert "MACD: 단기와 장기 평균의 차이" in text
         assert "confidence: 봇이 신호를 얼마나 강하게 보는지" in text
-        assert "횡보장: 매수 45점 이상 / 매도 40점 이상" in text
+        assert "횡보장: 매수 35점 이상 / 매도 30점 이상" in text
     finally:
         main_module._market_snapshots.clear()
         main_module._market_snapshots.update(original_snapshots)
