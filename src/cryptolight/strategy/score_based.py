@@ -22,7 +22,7 @@ REGIME_WEIGHTS: dict[str, dict] = {
     },
     "volatile": {
         "rsi": 1.0, "rsi_dir": 1.0, "macd": 1.0, "macd_hist": 1.0,
-        "bb": 1.0, "volume": 1.0, "buy_threshold": 40, "sell_threshold": 35,
+        "bb": 1.0, "volume": 1.0, "buy_threshold": 35, "sell_threshold": 30,
     },
 }
 DEFAULT_WEIGHTS = REGIME_WEIGHTS["volatile"]
@@ -48,8 +48,8 @@ class ScoreBasedStrategy(BaseStrategy):
     def __init__(
         self,
         rsi_period: int = 14,
-        rsi_oversold: float = 35.0,
-        rsi_overbought: float = 65.0,
+        rsi_oversold: float = 40.0,
+        rsi_overbought: float = 60.0,
         macd_fast: int = 12,
         macd_slow: int = 26,
         macd_signal: int = 9,

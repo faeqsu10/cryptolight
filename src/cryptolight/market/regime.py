@@ -16,7 +16,7 @@ class MarketRegime:
         adx_period: int = 14,
         bb_period: int = 20,
         adx_trend_threshold: float = 25.0,
-        bb_volatile_threshold: float = 0.06,
+        bb_volatile_threshold: float = 0.10,
     ):
         self.adx_period = adx_period
         self.bb_period = bb_period
@@ -39,14 +39,14 @@ class MarketRegime:
         adx = self._calc_adx(candles)
         bb_bw = self._calc_bb_bandwidth(candles)
 
-        if bb_bw >= self.bb_volatile_threshold:
-            regime = "volatile"
-            confidence = min(1.0, bb_bw / self.bb_volatile_threshold)
-            trade_weight = 0.5  # 변동성 높으면 주의
-        elif adx >= self.adx_trend_threshold:
+        if adx >= self.adx_trend_threshold:
             regime = "trending"
             confidence = min(1.0, adx / 50)
             trade_weight = 1.0  # 추세장에서 적극 매매
+        elif bb_bw >= self.bb_volatile_threshold:
+            regime = "volatile"
+            confidence = min(1.0, bb_bw / self.bb_volatile_threshold)
+            trade_weight = 0.5  # 변동성 높으면 주의
         else:
             regime = "sideways"
             confidence = 1.0 - (adx / self.adx_trend_threshold)

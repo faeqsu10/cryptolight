@@ -76,7 +76,7 @@ class TestScoreBasedStrategy:
         weights_v = strategy._get_weights()
 
         assert weights_t["buy_threshold"] < weights_s["buy_threshold"]
-        assert weights_s["buy_threshold"] < weights_v["buy_threshold"]
+        assert weights_s["buy_threshold"] <= weights_v["buy_threshold"]
 
     def test_regime_trending_boosts_macd(self):
         """추세장에서 MACD 가중치가 1.5배"""

@@ -1410,6 +1410,13 @@ def main():
         except Exception:
             logger.exception("자동 스크리닝 실패 — 기본 종목 사용")
 
+    # 보유 종목이 스크리닝에서 빠졌더라도 symbols에 포함 (손절/익절 체크 보장)
+    if broker:
+        for pos_sym, pos in broker.get_positions().items():
+            if pos.quantity > 0 and pos_sym not in symbols:
+                symbols.append(pos_sym)
+                logger.info("보유 종목 자동 추가: %s (스크리닝 대상 외)", pos_sym)
+
     # ── 1회 실행 모드 ──
     if once_mode:
         logger.info("1회 실행 모드")
