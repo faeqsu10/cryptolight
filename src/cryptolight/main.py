@@ -2,11 +2,7 @@
 
 import argparse
 import logging
-import signal
 import threading
-import time
-from datetime import datetime
-from pathlib import Path
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -26,18 +22,11 @@ from cryptolight.risk.cooldown import TradeCooldown
 from cryptolight.risk.position_sizer import PositionSizer
 from cryptolight.risk.risk_guard import RiskGuard
 from cryptolight.storage.repository import TradeRepository
-from cryptolight.storage.strategy_tracker import StrategyTracker
-import html as html_mod
 
 from cryptolight.bot.ai_assistant import AIAssistant, markdown_to_telegram_html
 from cryptolight.bot.formatters import (
     explain_indicators,
-    format_param_value,
-    format_datetime_for_user,
-    format_remaining_time,
-    parameter_label,
     parameter_change_explainer,
-    build_indicator_explainer_lines,
 )
 from cryptolight.evaluation import (
     PerformanceEvaluator,
@@ -46,7 +35,43 @@ from cryptolight.evaluation import (
     ParameterOptimizer,
 )
 from cryptolight.evaluation.optimizer import PARAM_RANGES
-from cryptolight.market.screener import run_screening_pipeline
+from cryptolight.runtime.bootstrap import (
+    bootstrap_runtime as runtime_bootstrap_runtime,
+)
+from cryptolight.runtime.commanding import command_loop as runtime_command_loop
+from cryptolight.runtime.improvement import (
+    parameter_tuning_job as runtime_parameter_tuning_job,
+    run_parameter_tuning as runtime_run_parameter_tuning,
+    self_improvement_job as runtime_self_improvement_job,
+)
+from cryptolight.runtime.orchestrator import (
+    daily_summary_job as runtime_daily_summary_job,
+    start_scheduler_runtime as runtime_start_scheduler_runtime,
+    setup_runtime_services as runtime_setup_runtime_services,
+)
+from cryptolight.runtime.reporting import (
+    build_market_context as runtime_build_market_context,
+    build_strategy_criteria_lines as runtime_build_strategy_criteria_lines,
+    build_tuning_history_lines as runtime_build_tuning_history_lines,
+    send_market_info as runtime_send_market_info,
+    send_parameter_tuning_update as runtime_send_parameter_tuning_update,
+    send_strategy_criteria as runtime_send_strategy_criteria,
+    send_tuning_history as runtime_send_tuning_history,
+)
+from cryptolight.runtime.state import (
+    active_symbols as _active_symbols,
+    get_market_snapshots_copy as _get_market_snapshots_copy,
+    get_runtime_state as runtime_get_runtime_state,
+    market_snapshots as _market_snapshots,
+    set_active_symbols as _set_active_symbols,
+    update_market_snapshot as _update_market_snapshot,
+)
+from cryptolight.runtime.strategy_engine import (
+    make_ws_price_callback as runtime_make_ws_price_callback,
+    price_monitor_job as runtime_price_monitor_job,
+    run_strategy as runtime_run_strategy,
+    strategy_job as runtime_strategy_job,
+)
 from cryptolight.strategy import create_strategy
 from cryptolight.strategy.score_based import REGIME_WEIGHTS
 from cryptolight.utils import setup_logger
@@ -63,7 +88,6 @@ _position_sizer: PositionSizer | None = None
 _health: HealthMonitor | None = None
 _regime_detector: MarketRegime | None = None
 _volume_filter: VolumeFilter | None = None
-_market_snapshots: dict[str, dict] = {}
 _ai_assistant: AIAssistant | None = None
 _cmd_handler: CommandHandler | None = None
 _scheduler: BlockingScheduler | None = None
@@ -102,6 +126,50 @@ def _load_active_strategy_parameters(repo: TradeRepository, settings, logger=Non
     return params
 
 
+def _set_active_strategy_name(strategy_name: str) -> None:
+    global _active_strategy_name
+    _active_strategy_name = strategy_name
+
+
+def _set_active_strategy_params(params: dict) -> None:
+    global _active_strategy_params
+    _active_strategy_params = dict(params)
+
+
+def _get_runtime_state(settings) -> dict:
+    return runtime_get_runtime_state(
+        settings,
+        get_effective_strategy_name=_get_effective_strategy_name,
+    )
+
+
+def _apply_runtime_session(session) -> tuple:
+    bot = session.bot
+    cmd_handler = session.cmd_handler
+    repo = session.repo
+    risk_guard = session.risk_guard
+    client = session.client
+    broker = session.broker
+    symbols = session.symbols
+
+    global _cmd_handler
+    _cmd_handler = cmd_handler
+
+    global _candle_cache, _cooldown, _position_sizer, _health, _regime_detector, _volume_filter, _ai_assistant
+    runtime_components = session.components
+    _health = runtime_components.health
+    _regime_detector = runtime_components.regime_detector
+    _volume_filter = runtime_components.volume_filter
+    _ai_assistant = runtime_components.ai_assistant
+    _candle_cache = runtime_components.candle_cache
+    _cooldown = runtime_components.cooldown
+    _position_sizer = runtime_components.position_sizer
+
+    _set_active_symbols(list(symbols))
+
+    return bot, cmd_handler, repo, risk_guard, client, broker, symbols
+
+
 def run_strategy(
     client: UpbitClient,
     bot: TelegramBot | None,
@@ -110,332 +178,28 @@ def run_strategy(
     symbols: list[str],
     settings,
 ):
-    """각 종목에 대해 전략을 실행하고 시그널을 전송한다."""
-
-    strategy_name = _get_effective_strategy_name(settings)
-    strategy = _build_strategy_instance(settings, strategy_name)
-
-    for symbol in symbols:
-        # 캔들 캐시 활용
-        candle_count = strategy.required_candle_count() * 2
-        interval = settings.candle_interval
-        cache_key = _candle_cache.make_key(symbol, interval, candle_count) if _candle_cache else ""
-        candles = (_candle_cache.get(cache_key) if _candle_cache else None)
-        if candles is None:
-            candles = client.get_candles(symbol, interval=interval, count=candle_count)
-            if _candle_cache:
-                _candle_cache.put(cache_key, candles)
-        ticker = client.get_ticker(symbol)
-
-        logger.info(
-            "%s 현재가: %s KRW (변동: %+.2f%%)",
-            symbol, f"{ticker.price:,.0f}", ticker.change_rate * 100,
-        )
-
-        # 급등/급락 알림 (음소거 시 건너뜀)
-        if bot and abs(ticker.change_rate) >= settings.surge_alert_threshold and bot.should_notify("signal"):
-            if not (_cmd_handler and _cmd_handler.muted):
-                bot.send_surge_alert(symbol, ticker.price, ticker.change_rate)
-
-        # 손절/익절 체크 (Paper + Live 모두 지원)
-        if risk_guard:
-            _sl_avg_price = 0.0
-            _sl_quantity = 0.0
-            pos = broker.get_position(symbol)
-            if pos:
-                _sl_avg_price = pos.avg_price
-                _sl_quantity = pos.quantity
-
-            if _sl_quantity > 0 and _sl_avg_price > 0:
-                sl_tp = risk_guard.check_stop_loss_take_profit(
-                    symbol, _sl_avg_price, _sl_quantity, ticker.price,
-                )
-                if sl_tp == "stop_loss":
-                    order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="손절 트리거")
-                    if order:
-                        _sl_pnl_pct = (ticker.price - _sl_avg_price) / _sl_avg_price * 100 if _sl_avg_price else 0
-                        _sl_pnl_krw = (ticker.price - _sl_avg_price) * _sl_quantity
-                        _sl_proceeds = ticker.price * _sl_quantity
-                        _sl_qty_str = f"{_sl_quantity:.8f}".rstrip("0").rstrip(".")
-                        logger.warning("손절 매도 실행: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
-                        if bot:
-                            bot.send_message(
-                                f"\U0001f534 <b>손절 매도</b>\n"
-                                f"종목: {symbol}\n"
-                                f"매도금액: {_sl_proceeds:,.0f} KRW\n"
-                                f"체결가격: {ticker.price:,.0f} KRW\n"
-                                f"매수평단: {_sl_avg_price:,.0f} KRW\n"
-                                f"수량: {_sl_qty_str}개\n"
-                                f"손익: {_sl_pnl_krw:+,.0f} KRW ({_sl_pnl_pct:+.1f}%)"
-                            )
-                    continue
-                elif sl_tp == "take_profit":
-                    order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="익절 트리거")
-                    if order:
-                        _tp_pnl_pct = (ticker.price - _sl_avg_price) / _sl_avg_price * 100 if _sl_avg_price else 0
-                        _tp_pnl_krw = (ticker.price - _sl_avg_price) * _sl_quantity
-                        _tp_proceeds = ticker.price * _sl_quantity
-                        _tp_qty_str = f"{_sl_quantity:.8f}".rstrip("0").rstrip(".")
-                        logger.info("익절 매도 실행: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
-                        if bot:
-                            bot.send_message(
-                                f"\U0001f7e2 <b>익절 매도</b>\n"
-                                f"종목: {symbol}\n"
-                                f"매도금액: {_tp_proceeds:,.0f} KRW\n"
-                                f"체결가격: {ticker.price:,.0f} KRW\n"
-                                f"매수평단: {_sl_avg_price:,.0f} KRW\n"
-                                f"수량: {_tp_qty_str}개\n"
-                                f"손익: {_tp_pnl_krw:+,.0f} KRW ({_tp_pnl_pct:+.1f}%)"
-                            )
-                    continue
-                elif sl_tp == "trailing_stop":
-                    order = broker.sell_market(symbol, _sl_quantity, ticker.price, reason="트레일링 스톱")
-                    if order:
-                        _ts_pnl_pct = (ticker.price - _sl_avg_price) / _sl_avg_price * 100 if _sl_avg_price else 0
-                        _ts_pnl_krw = (ticker.price - _sl_avg_price) * _sl_quantity
-                        _ts_proceeds = ticker.price * _sl_quantity
-                        _ts_qty_str = f"{_sl_quantity:.8f}".rstrip("0").rstrip(".")
-                        logger.warning("트레일링 스톱 매도: %s %.8f @ %s", symbol, _sl_quantity, f"{ticker.price:,.0f}")
-                        if bot:
-                            bot.send_message(
-                                f"\U0001f7e1 <b>트레일링 스톱</b>\n"
-                                f"종목: {symbol}\n"
-                                f"매도금액: {_ts_proceeds:,.0f} KRW\n"
-                                f"체결가격: {ticker.price:,.0f} KRW\n"
-                                f"매수평단: {_sl_avg_price:,.0f} KRW\n"
-                                f"수량: {_ts_qty_str}개\n"
-                                f"손익: {_ts_pnl_krw:+,.0f} KRW ({_ts_pnl_pct:+.1f}%)"
-                            )
-                    continue
-
-        # 시장 국면 감지
-        regime_info = None
-        if _regime_detector and len(candles) >= _regime_detector.required_candle_count():
-            regime_info = _regime_detector.detect(candles)
-            logger.info("시장 국면: %s (ADX=%.1f, 매매가중치=%.1f)", regime_info["regime"], regime_info["adx"], regime_info["trade_weight"])
-
-        # score 전략에 국면 연동
-        if hasattr(strategy, "regime") and regime_info:
-            strategy.regime = regime_info["regime"]
-
-        # 전략 분석
-        signal_result = strategy.analyze(candles)
-        signal_result.symbol = symbol
-
-        # 거래량 필터 적용
-        if _volume_filter:
-            signal_result = _volume_filter.apply(signal_result, candles)
-
-        logger.info(
-            "[%s] %s — %s (신뢰도: %.0f%%, RSI: %s)",
-            signal_result.action.upper(), symbol, signal_result.reason,
-            signal_result.confidence * 100, signal_result.indicators.get("rsi", "N/A"),
-        )
-
-        # 중복 시그널 방지 (스레드 안전) — 실행 전에는 읽기만, 업데이트는 주문 성공 후
-        with _signal_lock:
-            prev = _last_signals.get(symbol)
-            if prev == signal_result.action and signal_result.action != "hold":
-                logger.info("중복 시그널 스킵: %s → %s", symbol, signal_result.action)
-                continue
-            # hold 시그널이면 이전 기록을 지워 다음 buy/sell 허용
-            if signal_result.action == "hold":
-                _last_signals.pop(symbol, None)
-
-        # 주기 요약용 거래 수량/금액 추적
-        _snap_qty = 0.0
-        _snap_amount = 0.0
-
-        # 매수 실행
-        if broker and signal_result.action == "buy":
-            # confidence 게이트
-            if signal_result.confidence < settings.min_confidence:
-                logger.info(
-                    "신뢰도 부족 차단: %s confidence=%.2f < threshold=%.2f",
-                    symbol, signal_result.confidence, settings.min_confidence,
-                )
-                continue
-            # 쿨다운 체크
-            if _cooldown:
-                can, reason = _cooldown.can_trade(symbol)
-                if not can:
-                    logger.info("쿨다운 차단: %s — %s", symbol, reason)
-                    continue
-
-            # 리스크 체크
-            if risk_guard:
-                _balance_krw = broker.get_balance_krw()
-                _positions = broker.get_positions()
-                _active_positions = sum(1 for p in _positions.values() if p.quantity > 0)
-                _already_holding = broker.is_holding(symbol)
-
-                check = risk_guard.check_buy(
-                    symbol, settings.max_order_amount_krw,
-                    balance_krw=_balance_krw,
-                    active_positions=_active_positions,
-                    already_holding=_already_holding,
-                )
-                if not check.allowed:
-                    logger.warning("매수 차단: %s — %s", symbol, check.reason)
-                    if bot and bot.should_notify("risk_blocked"):
-                        bot.send_message(f"\u26a0\ufe0f <b>매수 차단</b>\n{symbol}: {check.reason}")
-                    continue
-
-            # 국면 가중치 게이트 (임계값 미만이면 매수 차단, 매도는 의도적 제외)
-            if regime_info and regime_info["trade_weight"] < settings.min_trade_weight:
-                logger.info("국면 가중치 미달 차단: %s weight=%.2f < %.2f", symbol, regime_info["trade_weight"], settings.min_trade_weight)
-                continue
-
-            # 포지션 사이징 (confidence 기반, trade_weight 감쇠 제거)
-            if _position_sizer:
-                equity = broker.get_equity({symbol: ticker.price})
-                order_amount = _position_sizer.calculate(equity, signal_result.confidence)
-            else:
-                order_amount = settings.max_order_amount_krw
-
-            order = broker.buy_market(symbol, order_amount, ticker.price, reason=signal_result.reason, strategy=strategy_name)
-            if order:
-                with _signal_lock:
-                    _last_signals[symbol] = "buy"
-                if _cooldown:
-                    _cooldown.record_trade(symbol)
-                _snap_qty = order.quantity
-                _snap_amount = order_amount
-                logger.info("매수 체결: %s %s KRW [%s]", symbol, f"{order_amount:,.0f}", settings.trade_mode)
-                if bot:
-                    coin_name = symbol.split("-")[1]
-                    qty_str = f"{order.quantity:.8f}".rstrip("0").rstrip(".")
-                    explain = explain_indicators(signal_result.indicators)
-                    bot.send_message(
-                        f"\U0001f7e2 <b>매수 체결</b>\n"
-                        f"종목: {symbol} ({coin_name})\n"
-                        f"매수금액: {order_amount:,.0f} KRW\n"
-                        f"체결가격: {ticker.price:,.0f} KRW\n"
-                        f"매수수량: {qty_str}개\n"
-                        f"사유: {signal_result.reason}\n"
-                        f"\n<b>지표 해설</b>\n<pre>{html_mod.escape(explain)}</pre>"
-                    )
-
-        elif broker and signal_result.action == "sell":
-            # 매도에도 confidence 게이트 적용 (손절/익절은 위에서 별도 처리)
-            if signal_result.confidence < settings.min_confidence:
-                logger.info(
-                    "매도 신뢰도 부족 스킵: %s confidence=%.2f < threshold=%.2f",
-                    symbol, signal_result.confidence, settings.min_confidence,
-                )
-                continue
-            _sell_qty = 0.0
-            _sell_avg_price = 0.0
-            _sell_order = None
-            pos = broker.get_position(symbol)
-            if pos:
-                _sell_qty = pos.quantity
-                _sell_avg_price = pos.avg_price
-                _sell_order = broker.sell_market(symbol, pos.quantity, ticker.price, reason=signal_result.reason, strategy=strategy_name)
-                if _sell_order:
-                    _snap_qty = _sell_qty
-                    _snap_amount = _sell_qty * ticker.price
-                    logger.info("매도 체결: %s %.8f [%s]", symbol, pos.quantity, settings.trade_mode)
-            else:
-                logger.info("매도 시그널이지만 보유 수량 없음: %s", symbol)
-
-            if _sell_order:
-                with _signal_lock:
-                    _last_signals[symbol] = "sell"
-            if _sell_order and bot:
-                coin_name = symbol.split("-")[1]
-                qty_str = f"{_sell_qty:.8f}".rstrip("0").rstrip(".")
-                proceeds = _sell_qty * ticker.price
-                _sell_pnl_pct = (ticker.price - _sell_avg_price) / _sell_avg_price * 100 if _sell_avg_price else 0
-                _sell_pnl_krw = (ticker.price - _sell_avg_price) * _sell_qty
-                explain = explain_indicators(signal_result.indicators)
-                bot.send_message(
-                    f"\U0001f534 <b>매도 체결</b>\n"
-                    f"종목: {symbol} ({coin_name})\n"
-                    f"매도금액: {proceeds:,.0f} KRW\n"
-                    f"체결가격: {ticker.price:,.0f} KRW\n"
-                    f"매수평단: {_sell_avg_price:,.0f} KRW\n"
-                    f"매도수량: {qty_str}개\n"
-                    f"손익: {_sell_pnl_krw:+,.0f} KRW ({_sell_pnl_pct:+.1f}%)\n"
-                    f"사유: {signal_result.reason}"
-                )
-
-        # 시장 상태 수집 (텔레그램 요약용)
-        _market_snapshots[symbol] = {
-            "price": ticker.price,
-            "change": ticker.change_rate * 100,
-            "rsi": signal_result.indicators.get("rsi"),
-            "action": signal_result.action,
-            "regime": regime_info["regime"] if regime_info else "N/A",
-            "adx": regime_info["adx"] if regime_info else 0,
-            "weight": regime_info["trade_weight"] if regime_info else 1.0,
-            "trade_qty": _snap_qty,
-            "trade_amount": _snap_amount,
-            "indicators": signal_result.indicators,
-            "confidence": signal_result.confidence,
-        }
-
-        # 텔레그램 시그널 전송 (hold 제외, 체결 완료 종목 제외, 음소거 시 건너뜀)
-        _already_executed = _snap_qty > 0  # 이번 주기에 체결된 종목이면 중복 알림 방지
-        if bot and signal_result.action != "hold" and not _already_executed and bot.should_notify("signal"):
-            if not (_cmd_handler and _cmd_handler.muted):
-                bot.send_signal(signal_result, price=ticker.price)
-            else:
-                logger.info("알림 음소거 중 — 시그널 전송 생략")
-        elif bot and signal_result.action == "hold":
-            logger.info("관망 시그널 — 텔레그램 전송 생략")
-
-    # HIGH-3: Live 모드 잔고 캐시 클리어 (다음 주기에 갱신)
-    _market_snapshots.pop("_live_balances", None)
-
-    # 포트폴리오 요약 + 시장 상태 (MEDIUM-3: 이미 수집된 가격 재활용)
-    if broker is not None:
-        prices = {sym: snap["price"] for sym, snap in _market_snapshots.items() if isinstance(snap, dict) and "price" in snap}
-        # 보유 중이지만 현재 symbols에 없는 종목도 가격 조회
-        for pos_symbol, pos in broker.get_positions().items():
-            if pos.quantity > 0 and pos_symbol not in prices:
-                try:
-                    pos_ticker = client.get_ticker(pos_symbol)
-                    prices[pos_symbol] = pos_ticker.price
-                except Exception:
-                    logger.warning("보유 종목 가격 조회 실패: %s", pos_symbol)
-        summary = broker.summary_text(prices)
-
-        # 시장 상태 라인 추가
-        market_lines = []
-        for sym, snap in _market_snapshots.items():
-            rsi_val = f"{snap['rsi']:.1f}" if snap['rsi'] else "N/A"
-            market_lines.append(
-                f"{sym}: RSI={rsi_val} | {snap['regime']}(ADX={snap['adx']:.0f}) | {snap['change']:+.1f}%"
-            )
-        market_text = "\n".join(market_lines)
-
-        logger.info("=== Paper Trading 현황 ===\n%s", summary)
-        if bot:
-            # 이번 주기 거래 내역 구성
-            cycle_trades_lines = []
-            for sym, snap in _market_snapshots.items():
-                if snap["action"] == "buy" and snap.get("trade_qty", 0) > 0:
-                    qty_str = f"{snap['trade_qty']:.8f}".rstrip("0").rstrip(".")
-                    cycle_trades_lines.append(
-                        f"  \U0001f7e2 <b>{sym.split('-')[1]}</b> 매수 — "
-                        f"{snap['trade_amount']:,.0f}원 / {qty_str}개 @ {snap['price']:,.0f}원"
-                    )
-                elif snap["action"] == "sell" and snap.get("trade_qty", 0) > 0:
-                    qty_str = f"{snap['trade_qty']:.8f}".rstrip("0").rstrip(".")
-                    cycle_trades_lines.append(
-                        f"  \U0001f534 <b>{sym.split('-')[1]}</b> 매도 — "
-                        f"{snap['trade_amount']:,.0f}원 / {qty_str}개 @ {snap['price']:,.0f}원"
-                    )
-
-            # 거래가 있었을 때만 현황 전송 (hold-only 주기는 생략)
-            if cycle_trades_lines and bot.should_notify("cycle_summary"):
-                msg_parts = ["\U0001f4b0 <b>Paper Trading 현황</b>"]
-                msg_parts.append("\n\U0001f4dd <b>이번 주기 거래</b>")
-                msg_parts.extend(cycle_trades_lines)
-                msg_parts.append(f"\n<pre>{html_mod.escape(summary)}</pre>")
-                msg_parts.append(f"\n\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(market_text)}</pre>")
-                bot.send_message("\n".join(msg_parts))
+    runtime_run_strategy(
+        client,
+        bot,
+        broker,
+        risk_guard,
+        symbols,
+        settings,
+        logger=logger,
+        get_effective_strategy_name=_get_effective_strategy_name,
+        build_strategy_instance=_build_strategy_instance,
+        candle_cache=_candle_cache,
+        update_market_snapshot=_update_market_snapshot,
+        cmd_handler=_cmd_handler,
+        regime_detector=_regime_detector,
+        volume_filter=_volume_filter,
+        signal_lock=_signal_lock,
+        last_signals=_last_signals,
+        cooldown=_cooldown,
+        position_sizer=_position_sizer,
+        market_snapshots=_market_snapshots,
+        explain_indicators=explain_indicators,
+    )
 
 
 def strategy_job(
@@ -446,16 +210,17 @@ def strategy_job(
     symbols: list[str],
     settings,
 ):
-    """스케줄러에서 호출되는 전략 래퍼. 에러 시 해당 주기만 스킵."""
-
-    try:
-        run_strategy(client, bot, broker, risk_guard, symbols, settings)
-        if _health:
-            _health.record_success()
-    except Exception:
-        logger.exception("전략 실행 중 에러 발생 — 이번 주기 스킵")
-        if _health:
-            _health.record_failure()
+    runtime_strategy_job(
+        client,
+        bot,
+        broker,
+        risk_guard,
+        symbols,
+        settings,
+        logger=logger,
+        health=_health,
+        run_strategy_fn=run_strategy,
+    )
 
 
 def price_monitor_job(
@@ -465,54 +230,15 @@ def price_monitor_job(
     risk_guard: RiskGuard | None,
     symbols: list[str],
 ):
-    """5분마다 보유 종목 가격을 확인하여 손절/익절/트레일링 스톱을 체크한다."""
-    if not broker or not risk_guard:
-        return
-
-    for symbol in symbols:
-        pos = broker.get_position(symbol)
-        if not pos or pos.quantity <= 0 or pos.avg_price <= 0:
-            continue
-
-        try:
-            ticker = client.get_ticker(symbol)
-        except Exception:
-            logger.warning("가격 모니터링 조회 실패: %s", symbol)
-            continue
-
-        sl_tp = risk_guard.check_stop_loss_take_profit(
-            symbol, pos.avg_price, pos.quantity, ticker.price,
-        )
-        if not sl_tp:
-            continue
-
-        _avg = pos.avg_price
-        _qty = pos.quantity
-        _pnl_pct = (ticker.price - _avg) / _avg * 100
-        _pnl_krw = (ticker.price - _avg) * _qty
-        _proceeds = ticker.price * _qty
-        _qty_str = f"{_qty:.8f}".rstrip("0").rstrip(".")
-
-        trigger_labels = {
-            "stop_loss": ("\U0001f534", "손절 매도", "손절 트리거"),
-            "take_profit": ("\U0001f7e2", "익절 매도", "익절 트리거"),
-            "trailing_stop": ("\U0001f7e1", "트레일링 스톱", "트레일링 스톱"),
-        }
-        emoji, label, reason = trigger_labels[sl_tp]
-
-        order = broker.sell_market(symbol, _qty, ticker.price, reason=reason)
-        if order:
-            logger.warning("%s 실행: %s %.8f @ %s", label, symbol, _qty, f"{ticker.price:,.0f}")
-            if bot:
-                bot.send_message(
-                    f"{emoji} <b>{label}</b>\n"
-                    f"종목: {symbol}\n"
-                    f"매도금액: {_proceeds:,.0f} KRW\n"
-                    f"체결가격: {ticker.price:,.0f} KRW\n"
-                    f"매수평단: {_avg:,.0f} KRW\n"
-                    f"수량: {_qty_str}개\n"
-                    f"손익: {_pnl_krw:+,.0f} KRW ({_pnl_pct:+.1f}%)"
-                )
+    runtime_price_monitor_job(
+        client,
+        bot,
+        broker,
+        risk_guard,
+        symbols,
+        logger=logger,
+        update_market_snapshot=_update_market_snapshot,
+    )
 
 
 def _make_ws_price_callback(
@@ -520,68 +246,13 @@ def _make_ws_price_callback(
     risk_guard: RiskGuard,
     bot: TelegramBot | None,
 ):
-    """WebSocket 가격 수신 시 손절/익절을 즉시 체크하는 콜백을 생성한다."""
-
-    def on_price(symbol: str, price: float, data: dict):
-        pos = broker.get_position(symbol)
-        if not pos or pos.quantity <= 0 or pos.avg_price <= 0:
-            return
-
-        sl_tp = risk_guard.check_stop_loss_take_profit(
-            symbol, pos.avg_price, pos.quantity, price,
-        )
-        if not sl_tp:
-            return
-
-        _avg = pos.avg_price
-        _qty = pos.quantity
-        _pnl_pct = (price - _avg) / _avg * 100
-        _pnl_krw = (price - _avg) * _qty
-        _proceeds = price * _qty
-        _qty_str = f"{_qty:.8f}".rstrip("0").rstrip(".")
-
-        trigger_labels = {
-            "stop_loss": ("\U0001f534", "손절 매도", "손절 트리거(WS)"),
-            "take_profit": ("\U0001f7e2", "익절 매도", "익절 트리거(WS)"),
-            "trailing_stop": ("\U0001f7e1", "트레일링 스톱", "트레일링 스톱(WS)"),
-        }
-        emoji, label, reason = trigger_labels[sl_tp]
-
-        order = broker.sell_market(symbol, _qty, price, reason=reason)
-        if order:
-            logger.warning("[WS] %s 실행: %s %.8f @ %s", label, symbol, _qty, f"{price:,.0f}")
-            if bot:
-                bot.send_message(
-                    f"{emoji} <b>{label}</b> (실시간)\n"
-                    f"종목: {symbol}\n"
-                    f"매도금액: {_proceeds:,.0f} KRW\n"
-                    f"체결가격: {price:,.0f} KRW\n"
-                    f"매수평단: {_avg:,.0f} KRW\n"
-                    f"수량: {_qty_str}개\n"
-                    f"손익: {_pnl_krw:+,.0f} KRW ({_pnl_pct:+.1f}%)"
-                )
-
-    return on_price
-
-
-def _ws_on_connect():
-    """WebSocket 연결 성공 시 폴링 job 일시 정지."""
-    if _scheduler:
-        try:
-            _scheduler.pause_job("price_monitor")
-            logger.info("WebSocket 연결됨 — price_monitor 폴링 일시 정지")
-        except Exception:
-            pass
-
-
-def _ws_on_disconnect():
-    """WebSocket 연결 끊김 시 폴링 job 재개."""
-    if _scheduler:
-        try:
-            _scheduler.resume_job("price_monitor")
-            logger.warning("WebSocket 끊김 — price_monitor 폴링 재개")
-        except Exception:
-            pass
+    return runtime_make_ws_price_callback(
+        broker,
+        risk_guard,
+        bot,
+        logger=logger,
+        update_market_snapshot=_update_market_snapshot,
+    )
 
 
 def daily_summary_job(
@@ -591,54 +262,14 @@ def daily_summary_job(
     client: UpbitClient,
     symbols: list[str],
 ):
-    """매일 09:00 KST에 실행되는 일일 요약 job"""
-
-    try:
-        pnl_data = repo.get_daily_pnl()
-        positions_summary = ""
-        if broker is not None:
-            prices = {}
-            for symbol in symbols:
-                ticker = client.get_ticker(symbol)
-                prices[symbol] = ticker.price
-            # 보유 중이지만 symbols에 없는 종목도 가격 조회
-            for pos_symbol, pos in broker.get_positions().items():
-                if pos.quantity > 0 and pos_symbol not in prices:
-                    try:
-                        pos_ticker = client.get_ticker(pos_symbol)
-                        prices[pos_symbol] = pos_ticker.price
-                    except Exception:
-                        pass
-            positions_summary = broker.summary_text(prices)
-        # 오늘 거래 내역 조회
-        today_trades = repo.get_trades(limit=50)
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        today_trades = [t for t in today_trades if t.timestamp.startswith(today_str)]
-        # 전략별 성과 추가
-        tracker = StrategyTracker(repo)
-        strategy_summary = tracker.summary_text()
-        # 보유 코인 상세 정보 구성
-        holdings = []
-        if broker is not None:
-            for pos_sym, pos in broker.get_positions().items():
-                if pos.quantity > 0:
-                    cur_price = prices.get(pos_sym, 0)
-                    holdings.append({
-                        "symbol": pos_sym,
-                        "coin": pos_sym.split("-")[1] if "-" in pos_sym else pos_sym,
-                        "quantity": pos.quantity,
-                        "avg_price": pos.avg_price,
-                        "current_price": cur_price,
-                        "eval_amount": pos.quantity * cur_price,
-                        "cost": pos.quantity * pos.avg_price,
-                        "pnl": (cur_price - pos.avg_price) * pos.quantity,
-                    })
-        bot.send_daily_summary(pnl_data, positions_summary, today_trades, holdings, broker.get_balance_krw() if broker else 0)
-        if strategy_summary and "데이터 없음" not in strategy_summary:
-            bot.send_message(f"<b>전략별 성과</b>\n<pre>{strategy_summary}</pre>")
-        logger.info("일일 요약 전송 완료")
-    except Exception:
-        logger.exception("일일 요약 전송 실패")
+    runtime_daily_summary_job(
+        bot,
+        broker,
+        repo,
+        client,
+        symbols,
+        logger=logger,
+    )
 
 
 def self_improvement_job(
@@ -647,352 +278,69 @@ def self_improvement_job(
     bot: TelegramBot | None,
     settings,
 ):
-    """주간 자기개선 루프: 성과 평가 → Arena 경쟁 → 전략 전환 판단."""
-
-    if not settings.enable_auto_optimization:
-        return
-
-    try:
-        current_strategy = _get_effective_strategy_name(settings)
-        # 1. 성과 평가
-        evaluator = PerformanceEvaluator(repo)
-        perf_summary = evaluator.summary_text(days=settings.arena_lookback_days)
-        logger.info("자기개선 루프 시작\n%s", perf_summary)
-
-        # 2. Arena 경쟁 — 캔들 데이터 수집
-        symbol = settings.symbol_list[0] if settings.symbol_list else "KRW-BTC"
-        candles = client.get_candles(symbol, interval="day", count=settings.arena_lookback_days)
-
-        arena = StrategyArena(
-            initial_balance=settings.paper_initial_balance,
-            order_amount=settings.max_order_amount_krw,
-            n_folds=3,
-            slippage_pct=settings.backtest_slippage_pct,
-            spread_pct=settings.backtest_spread_pct,
-            candle_interval=settings.candle_interval,
-        )
-        arena_results = arena.compete(candles)
-        arena_text = arena.summary_text(arena_results)
-        logger.info(arena_text)
-
-        # 3. 전략 전환 판단
-        controller = AdaptiveController(
-            repo=repo,
-            min_sharpe_improvement=settings.min_sharpe_improvement,
-            cooldown_days=settings.switch_cooldown_days,
-        )
-
-        switch_decision = controller.should_switch(
-            current_strategy, arena_results, evaluator,
-        )
-        logger.info("전환 판단: %s", switch_decision["reason"])
-
-        if switch_decision["switch"]:
-            controller.record_switch(
-                switch_decision["from"], switch_decision["to"], switch_decision["reason"],
-            )
-            # HIGH-1: mutable 전략명 실제 적용
-            global _active_strategy_name
-            _active_strategy_name = switch_decision["to"]
-            _load_active_strategy_parameters(repo, settings, logger)
-            msg = (
-                f"전략 전환: {switch_decision['from']} → {switch_decision['to']}\n"
-                f"사유: {switch_decision['reason']}"
-            )
-            logger.warning(msg)
-            if bot:
-                bot.send_message(f"<b>전략 자동 전환</b>\n<pre>{html_mod.escape(msg)}</pre>")
-
-        # 4. 롤백 체크
-        active_strategy = _get_effective_strategy_name(settings)
-        rollback = controller.check_rollback(active_strategy, evaluator)
-        if rollback:
-            logger.warning("롤백 제안: %s", rollback["reason"])
-            if bot:
-                bot.send_message(
-                    f"<b>롤백 제안</b>\n"
-                    f"{html_mod.escape(rollback['from'])} → {html_mod.escape(rollback['to'])}\n"
-                    f"사유: {html_mod.escape(rollback['reason'])}"
-                )
-
-        # 5. 텔레그램 요약 전송
-        if bot:
-            bot.send_message(
-                f"<b>자기개선 루프 완료</b>\n<pre>{html_mod.escape(arena_text)}</pre>\n"
-                f"전환 판단: {html_mod.escape(switch_decision['reason'])}"
-            )
-
-    except Exception:
-        logger.exception("자기개선 루프 실행 중 에러")
+    runtime_self_improvement_job(
+        client,
+        repo,
+        bot,
+        settings,
+        logger=logger,
+        get_effective_strategy_name=_get_effective_strategy_name,
+        load_active_strategy_parameters=_load_active_strategy_parameters,
+        set_active_strategy_name=_set_active_strategy_name,
+    )
 
 
 def _build_market_context() -> str:
-    """AI 질문에 첨부할 현재 시장 컨텍스트를 구성한다."""
-    if not _market_snapshots:
-        return ""
-    lines = []
-    for sym, snap in _market_snapshots.items():
-        rsi_val = f"{snap['rsi']:.1f}" if snap.get('rsi') else "N/A"
-        lines.append(
-            f"{sym}: 가격={snap.get('price', 0):,.0f}원, "
-            f"변동={snap.get('change', 0):+.1f}%, "
-            f"RSI={rsi_val}, "
-            f"국면={snap.get('regime', 'N/A')}(ADX={snap.get('adx', 0):.0f}), "
-            f"판단={snap.get('action', 'hold')}"
-        )
-    return "\n".join(lines)
+    return runtime_build_market_context(
+        get_market_snapshots_copy=_get_market_snapshots_copy,
+    )
 
 
 def _send_market_info(bot: TelegramBot, settings) -> None:
-    """현재 시장 상태를 텔레그램으로 전송한다."""
-    if not _market_snapshots:
-        bot.send_message("아직 시장 데이터가 없습니다. 다음 주기까지 대기해주세요.")
-        return
-
-    lines = []
-    for sym, snap in _market_snapshots.items():
-        rsi_val = snap.get("rsi")
-        rsi_str = f"{rsi_val:.1f}" if rsi_val else "N/A"
-        regime = snap.get("regime", "N/A")
-        price = snap.get("price", 0)
-        change = snap.get("change", 0)
-        action = snap.get("action", "hold")
-
-        action_kr = {"buy": "매수", "sell": "매도", "hold": "관망"}.get(action, action)
-
-        # RSI 해설
-        if rsi_val is not None:
-            if rsi_val <= 30:
-                rsi_desc = "과매도 (싸게 살 기회)"
-            elif rsi_val >= 70:
-                rsi_desc = "과매수 (비싸서 위험)"
-            elif rsi_val <= 40:
-                rsi_desc = "약간 저평가"
-            elif rsi_val >= 60:
-                rsi_desc = "약간 고평가"
-            else:
-                rsi_desc = "중립 (뚜렷한 방향 없음)"
-        else:
-            rsi_desc = ""
-
-        # 국면 해설
-        regime_desc = {
-            "trending": "추세장 — 한 방향으로 강하게 움직이는 중",
-            "sideways": "횡보장 — 큰 움직임 없이 제자리",
-            "volatile": "변동장 — 위아래로 크게 흔들리는 중",
-        }.get(regime, "")
-
-        # 판단 해설
-        action_desc = {
-            "buy": "매수 조건 충족 — 봇이 매수를 시도합니다",
-            "sell": "매도 조건 충족 — 봇이 매도를 시도합니다",
-            "hold": "매매 조건 미충족 — 지켜보는 중",
-        }.get(action, "")
-
-        # 변동률 해설
-        if abs(change) >= 5:
-            change_desc = " (큰 변동!)" if change > 0 else " (큰 하락!)"
-        elif abs(change) >= 2:
-            change_desc = " (상승세)" if change > 0 else " (하락세)"
-        else:
-            change_desc = " (안정적)"
-
-        lines.append(f"── {sym} ──")
-        lines.append(f"  현재가: {price:,.0f} KRW ({change:+.1f}%){change_desc}")
-        lines.append(f"  RSI: {rsi_str} — {rsi_desc}")
-        lines.append(f"  국면: {regime} — {regime_desc}")
-        lines.append(f"  봇 판단: {action_kr} — {action_desc}")
-
-    strategy_name = _get_effective_strategy_name(settings)
-    strategy_desc = {
-        "rsi": "RSI (과매수/과매도 기반)",
-        "macd": "MACD (추세 전환 감지)",
-        "bollinger": "볼린저밴드 (가격 이탈 감지)",
-        "score": "스코어 (여러 지표 합산)",
-        "ensemble": "앙상블 (여러 전략 종합)",
-        "volatility_breakout": "변동성 돌파",
-    }.get(strategy_name, strategy_name)
-
-    lines.append(f"\n전략: {strategy_desc}")
-    lines.append("")
-    lines.extend(_build_strategy_criteria_lines(settings))
-    lines.append(f"분석 주기: {settings.schedule_interval_minutes}분마다 자동 분석")
-
-    bot.send_message(
-        f"\U0001f4ca <b>시장 상태</b>\n<pre>{html_mod.escape(chr(10).join(lines))}</pre>"
+    runtime_send_market_info(
+        bot,
+        settings,
+        get_market_snapshots_copy=_get_market_snapshots_copy,
+        get_effective_strategy_name=_get_effective_strategy_name,
+        build_strategy_criteria_lines=_build_strategy_criteria_lines,
     )
 
 
 def _build_strategy_criteria_lines(settings) -> list[str]:
-    """현재 전략의 매수/매도 기준을 사람이 읽기 쉽게 요약한다."""
-    strategy_name = _get_effective_strategy_name(settings)
-    strategy = _build_strategy_instance(settings, strategy_name)
-    active_params = strategy.get_tunable_params()
-    tuned = bool(_get_effective_strategy_params(settings, strategy_name))
-    lines = ["현재 매수/매도 기준:"]
-
-    if strategy_name == "score":
-        lines.extend([
-            (
-                "  매수 팩터: "
-                f"RSI<={strategy.rsi_oversold:.0f}, RSI 반등, "
-                f"MACD 상향({strategy.macd_fast}/{strategy.macd_slow}/{strategy.macd_signal}), "
-                f"히스토그램 증가, BB 하단/%B<0.2(기간 {strategy.bb_period}, 표준편차 {strategy.bb_std_mult:.2f}), "
-                f"거래량 평균 이상(기간 {strategy.volume_period})"
-            ),
-            (
-                "  매도 팩터: "
-                f"RSI>={strategy.rsi_overbought:.0f}, RSI 하락, "
-                f"MACD 하향({strategy.macd_fast}/{strategy.macd_slow}/{strategy.macd_signal}), "
-                f"히스토그램 감소, BB 상단/%B>0.8(기간 {strategy.bb_period}, 표준편차 {strategy.bb_std_mult:.2f}), "
-                f"거래량 평균 이상(기간 {strategy.volume_period})"
-            ),
-        ])
-        lines.append(
-            "  현재 적용값: "
-            f"RSI 기간 {strategy.rsi_period}, "
-            f"과매도 {strategy.rsi_oversold:.0f}, 과매수 {strategy.rsi_overbought:.0f}, "
-            f"MACD {strategy.macd_fast}/{strategy.macd_slow}/{strategy.macd_signal}, "
-            f"BB 기간 {strategy.bb_period}, 표준편차 {strategy.bb_std_mult:.2f}, "
-            f"거래량 기간 {strategy.volume_period} "
-            f"({'자동 조정값' if tuned else '기본값'})"
-        )
-        seen_regimes: list[str] = []
-        for snap in _market_snapshots.values():
-            regime = snap.get("regime")
-            if regime in REGIME_WEIGHTS and regime not in seen_regimes:
-                seen_regimes.append(regime)
-        regimes = seen_regimes or ["trending", "sideways", "volatile"]
-        for regime in regimes:
-            weights = REGIME_WEIGHTS[regime]
-            regime_kr = {
-                "trending": "추세장",
-                "sideways": "횡보장",
-                "volatile": "변동장",
-            }.get(regime, regime)
-            lines.append(
-                f"  {regime_kr}: 매수 {weights['buy_threshold']}점 이상 / 매도 {weights['sell_threshold']}점 이상"
-            )
-        lines.append(f"  추가 게이트: confidence {settings.min_confidence:.0%} 이상일 때만 실제 매수")
-        lines.extend(build_indicator_explainer_lines(strategy_name, min_confidence=settings.min_confidence))
-        return lines
-
-    if strategy_name == "rsi":
-        lines.append(f"  매수: RSI <= {strategy.oversold:.0f} (기간 {strategy.period})")
-        lines.append(f"  매도: RSI >= {strategy.overbought:.0f} (기간 {strategy.period})")
-        lines.append(
-            f"  현재 적용값: RSI 기간 {active_params['period']}, 과매도 {active_params['oversold']:.0f}, "
-            f"과매수 {active_params['overbought']:.0f} "
-            f"({'자동 조정값' if tuned else '기본값'})"
-        )
-    elif strategy_name == "macd":
-        lines.append(
-            f"  매수: 직전엔 MACD < Signal, 현재 MACD > Signal (골든크로스, {strategy.fast}/{strategy.slow}/{strategy.signal_period})"
-        )
-        lines.append(
-            f"  매도: 직전엔 MACD > Signal, 현재 MACD < Signal (데드크로스, {strategy.fast}/{strategy.slow}/{strategy.signal_period})"
-        )
-        lines.append(
-            f"  현재 적용값: MACD 빠른선 {active_params['fast']}, 느린선 {active_params['slow']}, "
-            f"시그널 {active_params['signal_period']} "
-            f"({'자동 조정값' if tuned else '기본값'})"
-        )
-    elif strategy_name == "bollinger":
-        lines.append(f"  매수: 종가가 볼린저 하단 이하 (period={strategy.period}, std={strategy.std_mult})")
-        lines.append(f"  매도: 종가가 볼린저 상단 이상 (period={strategy.period}, std={strategy.std_mult})")
-        lines.append(
-            f"  현재 적용값: 볼린저 기간 {active_params['period']}, 표준편차 {active_params['std_mult']:.2f} "
-            f"({'자동 조정값' if tuned else '기본값'})"
-        )
-    elif strategy_name == "volatility_breakout":
-        lines.append(f"  매수: 현재가 >= 시가 + 전일변동폭*k (k={strategy.k})")
-        lines.append("  매도: 현재가가 당일 시가 아래로 내려오면 하락 반전으로 판단")
-        lines.append(
-            f"  현재 적용값: k={active_params['k']:.2f} "
-            f"({'자동 조정값' if tuned else '기본값'})"
-        )
-    elif strategy_name == "ensemble":
-        strategy_names = ", ".join(settings.ensemble_strategy_list)
-        lines.append(f"  구성 전략: {strategy_names}")
-        lines.append("  매수/매도: 참여 전략의 2/3 이상 또는 과반수가 같은 방향일 때")
-    else:
-        lines.append(f"  전략별 상세 기준 요약 미지원: {strategy_name}")
-
-    lines.append(f"  추가 게이트: confidence {settings.min_confidence:.0%} 이상일 때만 실제 매수")
-    lines.extend(build_indicator_explainer_lines(strategy_name, min_confidence=settings.min_confidence))
-    return lines
+    return runtime_build_strategy_criteria_lines(
+        settings,
+        build_strategy_instance=_build_strategy_instance,
+        get_effective_strategy_name=_get_effective_strategy_name,
+        get_effective_strategy_params=_get_effective_strategy_params,
+        get_market_snapshots_copy=_get_market_snapshots_copy,
+        regime_weights=REGIME_WEIGHTS,
+    )
 
 
 def _send_strategy_criteria(bot: TelegramBot, settings) -> None:
-    lines = _build_strategy_criteria_lines(settings)
-    bot.send_message(
-        f"\U0001f4d8 <b>매수/매도 기준</b>\n<pre>{html_mod.escape(chr(10).join(lines))}</pre>"
+    runtime_send_strategy_criteria(
+        bot,
+        settings,
+        build_strategy_criteria_lines=_build_strategy_criteria_lines,
     )
 
 
 def _build_tuning_history_lines(repo: TradeRepository, settings) -> list[str]:
-    strategy_name = _get_effective_strategy_name(settings)
-    strategy = _build_strategy_instance(settings, strategy_name)
-    current_params = strategy.get_tunable_params()
-    recent = repo.get_recent_parameter_adjustments(limit=5, strategy=strategy_name)
-    latest = repo.get_latest_parameter_adjustment(strategy_name)
-    next_run = "알 수 없음"
-    if _scheduler:
-        job = _scheduler.get_job("parameter_tuning")
-        if job and getattr(job, "next_run_time", None):
-            next_run = format_datetime_for_user(job.next_run_time, settings.app_timezone)
-
-    remaining_cooldown = "없음"
-    if latest and settings.parameter_tuning_cooldown_hours > 0:
-        applied_at = datetime.fromisoformat(latest["applied_at"])
-        remaining_seconds = (
-            settings.parameter_tuning_cooldown_hours * 3600
-            - (datetime.now() - applied_at).total_seconds()
-        )
-        remaining_cooldown = format_remaining_time(remaining_seconds)
-
-    lines = [
-        f"현재 전략: {strategy_name}",
-        "현재 파라미터:",
-    ]
-    for parameter, value in current_params.items():
-        lines.append(f"  {parameter_label(strategy_name, parameter)}: {format_param_value(value)}")
-    lines.extend([
-        "",
-        "조정 스케줄:",
-        f"  다음 자동조정: {next_run}",
-        f"  실행 주기: {settings.parameter_tuning_interval_hours}시간마다",
-        f"  조정 쿨다운: {settings.parameter_tuning_cooldown_hours}시간",
-        f"  남은 쿨다운: {remaining_cooldown}",
-        "",
-        "최근 자동 조정:",
-    ])
-    if not recent:
-        lines.append("  아직 자동 조정 이력이 없습니다")
-        return lines
-
-    seen_keys: set[tuple[str, str]] = set()
-    for row in recent:
-        key = (row["strategy"], row["parameter"])
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        lines.append(
-            f"  {row['applied_at'][:16]} "
-            f"{parameter_label(row['strategy'], row['parameter'])}: "
-            f"{format_param_value(row['old_value'])} -> {format_param_value(row['new_value'])}"
-        )
-        if row.get("explanation"):
-            lines.append(f"    설명: {row['explanation']}")
-        if row.get("metric_summary"):
-            lines.append(f"    근거: {row['metric_summary']}")
-    return lines
+    return runtime_build_tuning_history_lines(
+        repo,
+        settings,
+        get_effective_strategy_name=_get_effective_strategy_name,
+        build_strategy_instance=_build_strategy_instance,
+        scheduler=_scheduler,
+    )
 
 
 def _send_tuning_history(bot: TelegramBot, repo: TradeRepository, settings) -> None:
-    lines = _build_tuning_history_lines(repo, settings)
-    bot.send_message(
-        f"\U0001f6e0\ufe0f <b>자동 조정 이력</b>\n<pre>{html_mod.escape(chr(10).join(lines))}</pre>"
+    runtime_send_tuning_history(
+        bot,
+        repo,
+        settings,
+        build_tuning_history_lines=_build_tuning_history_lines,
     )
 
 
@@ -1002,22 +350,11 @@ def _send_parameter_tuning_update(
     changed: list[dict],
     metric_summary: str,
 ) -> None:
-    lines = [
-        f"전략: {strategy_name}",
-        f"평가 결과: {metric_summary}",
-        "",
-        "변경 내용:",
-    ]
-    for item in changed:
-        lines.append(
-            f"  {parameter_label(strategy_name, item['parameter'])}: "
-            f"{format_param_value(item['old_value'])} -> {format_param_value(item['new_value'])}"
-        )
-        if item.get("explanation"):
-            lines.append(f"    초보자 설명: {item['explanation']}")
-
-    bot.send_message(
-        f"\U0001f6e0\ufe0f <b>기준 자동 조정 적용</b>\n<pre>{html_mod.escape(chr(10).join(lines))}</pre>"
+    runtime_send_parameter_tuning_update(
+        bot,
+        strategy_name,
+        changed,
+        metric_summary,
     )
 
 
@@ -1028,110 +365,21 @@ def _run_parameter_tuning(
     candles,
     bot: TelegramBot | None = None,
 ) -> dict:
-
-    if not settings.enable_auto_parameter_tuning:
-        return {"applied": False, "summary": "파라미터 자동 조정 비활성"}
-
-    if strategy_name not in PARAM_RANGES:
-        return {
-            "applied": False,
-            "summary": f"{strategy_name} 전략은 자동 파라미터 조정 대상이 아닙니다",
-        }
-
-    latest = repo.get_latest_parameter_adjustment(strategy_name)
-    if latest and settings.parameter_tuning_cooldown_hours > 0:
-        applied_at = datetime.fromisoformat(latest["applied_at"])
-        hours_since = (datetime.now() - applied_at).total_seconds() / 3600
-        if hours_since < settings.parameter_tuning_cooldown_hours:
-            return {
-                "applied": False,
-                "summary": (
-                    f"{strategy_name} 파라미터 조정 쿨다운 중 "
-                    f"({hours_since:.1f}/{settings.parameter_tuning_cooldown_hours}시간)"
-                ),
-            }
-
-    optimizer = ParameterOptimizer(
-        initial_balance=settings.paper_initial_balance,
-        order_amount=settings.max_order_amount_krw,
-        n_folds=settings.parameter_tuning_n_folds,
-        min_wf_consistency=settings.parameter_tuning_min_wf_consistency,
-        slippage_pct=settings.backtest_slippage_pct,
-        spread_pct=settings.backtest_spread_pct,
-        candle_interval=settings.candle_interval,
-    )
-
-    current_strategy = _build_strategy_instance(settings, strategy_name)
-    current_params = current_strategy.get_tunable_params()
-    baseline = optimizer.evaluate_params(strategy_name, current_params, candles)
-    result = optimizer.optimize(
+    return runtime_run_parameter_tuning(
+        repo,
+        settings,
         strategy_name,
         candles,
-        n_trials=settings.optimizer_trials,
+        logger=logger,
+        param_ranges=PARAM_RANGES,
+        bot=bot,
+        build_strategy_instance=_build_strategy_instance,
+        get_effective_strategy_name=_get_effective_strategy_name,
+        get_active_strategy_params=lambda: dict(_active_strategy_params),
+        set_active_strategy_params=_set_active_strategy_params,
+        send_parameter_tuning_update=_send_parameter_tuning_update,
+        parameter_change_explainer=parameter_change_explainer,
     )
-
-    if result.valid_trials == 0 or not result.best_params:
-        return {
-            "applied": False,
-            "summary": f"{strategy_name} 파라미터 조정 후보 없음",
-        }
-
-    baseline_sharpe = baseline.get("sharpe", 0.0) if baseline else 0.0
-    improvement = result.best_sharpe - baseline_sharpe
-    metric_summary = (
-        f"Sharpe {baseline_sharpe:.3f} -> {result.best_sharpe:.3f}, "
-        f"WF 일관성 {result.best_wf_consistency:.0f}%, "
-        f"수익 {result.best_return_pct:+.2f}%"
-    )
-
-    if improvement < settings.parameter_min_sharpe_improvement:
-        return {
-            "applied": False,
-            "summary": (
-                f"{strategy_name} 파라미터 유지 "
-                f"(개선폭 {improvement:.3f} < 기준 {settings.parameter_min_sharpe_improvement:.3f})"
-            ),
-            "metric_summary": metric_summary,
-        }
-
-    explanations = {
-        key: parameter_change_explainer(strategy_name, key, current_params.get(key), value)
-        for key, value in result.best_params.items()
-        if current_params.get(key) != value
-    }
-    changed = repo.apply_parameter_adjustments(
-        strategy=strategy_name,
-        new_params=result.best_params,
-        reason=(
-            f"최근 {settings.arena_lookback_days}개 캔들 기준 "
-            "Walk-Forward 통과 후보 중 Sharpe 개선"
-        ),
-        metric_summary=metric_summary,
-        explanations=explanations,
-        previous_params=current_params,
-    )
-
-    if not changed:
-        return {
-            "applied": False,
-            "summary": f"{strategy_name} 파라미터 유지 (현재 값과 최적값 동일)",
-            "metric_summary": metric_summary,
-        }
-
-    global _active_strategy_params
-    if strategy_name == _get_effective_strategy_name(settings):
-        _active_strategy_params = repo.get_strategy_parameters(strategy_name)
-
-    logger.info("파라미터 자동 조정 적용: %s %s", strategy_name, changed)
-    if bot:
-        _send_parameter_tuning_update(bot, strategy_name, changed, metric_summary)
-
-    return {
-        "applied": True,
-        "summary": f"{strategy_name} 파라미터 자동 조정 적용",
-        "metric_summary": metric_summary,
-        "changed": changed,
-    }
 
 
 def parameter_tuning_job(
@@ -1141,51 +389,17 @@ def parameter_tuning_job(
     symbols: list[str],
     settings,
 ):
-    """더 짧은 주기로 현재 전략 파라미터만 미세 조정한다."""
-
-    if not settings.enable_auto_parameter_tuning:
-        return
-
-    try:
-        strategy_name = _get_effective_strategy_name(settings)
-        strategy = _build_strategy_instance(settings, strategy_name)
-        candle_count = max(
-            settings.parameter_tuning_lookback_candles,
-            strategy.required_candle_count() * 3,
-        )
-
-        # 모든 대상 종목의 캔들로 파라미터 튜닝 (단일 종목 과적합 방지)
-        tune_symbols = symbols if symbols else settings.symbol_list
-        if not tune_symbols:
-            tune_symbols = ["KRW-BTC"]
-        all_candles: list[list] = []
-        for sym in tune_symbols:
-            try:
-                sym_candles = client.get_candles(
-                    sym,
-                    interval=settings.candle_interval,
-                    count=candle_count,
-                )
-                if len(sym_candles) >= strategy.required_candle_count():
-                    all_candles.append(sym_candles)
-            except Exception:
-                logger.warning("파라미터 튜닝 캔들 조회 실패: %s", sym)
-
-        if not all_candles:
-            logger.warning("파라미터 튜닝: 유효 캔들 없음")
-            return
-
-        candles = all_candles[0]
-        result = _run_parameter_tuning(
-            repo=repo,
-            settings=settings,
-            strategy_name=strategy_name,
-            candles=candles,
-            bot=bot,
-        )
-        logger.info("파라미터 조정 job 완료: %s", result["summary"])
-    except Exception:
-        logger.exception("파라미터 조정 job 실패")
+    runtime_parameter_tuning_job(
+        client,
+        repo,
+        bot,
+        symbols,
+        settings,
+        logger=logger,
+        get_effective_strategy_name=_get_effective_strategy_name,
+        build_strategy_instance=_build_strategy_instance,
+        run_parameter_tuning=_run_parameter_tuning,
+    )
 
 
 def command_loop(
@@ -1199,62 +413,27 @@ def command_loop(
     settings=None,
     stop_event: threading.Event | None = None,
 ):
-    """명령어 long polling 루프 (전용 스레드에서 실행). 킬스위치 감지 시 스케줄러 종료."""
-
-    logger.info("명령어 폴링 스레드 시작 (long polling)")
-    consecutive_failures = 0
-    backoff_initial = max(0.1, float(getattr(settings, "telegram_poll_backoff_initial_seconds", 1.0)))
-    backoff_max = max(backoff_initial, float(getattr(settings, "telegram_poll_backoff_max_seconds", 30.0)))
-    while not (stop_event and stop_event.is_set()):
-        try:
-            cmd_handler.poll_commands()
-            if not cmd_handler.last_poll_ok:
-                consecutive_failures += 1
-                sleep_seconds = min(backoff_max, backoff_initial * (2 ** (consecutive_failures - 1)))
-                logger.warning(
-                    "명령어 폴링 실패: %d회 연속, %.1fs 후 재시도",
-                    consecutive_failures,
-                    sleep_seconds,
-                )
-                time.sleep(sleep_seconds)
-                continue
-
-            consecutive_failures = 0
-            if cmd_handler.kill_switch:
-                logger.warning("킬스위치 활성 — 스케줄러 종료 요청")
-                if bot:
-                    bot.send_message("\u26d4 킬스위치 활성 — 봇을 종료합니다.")
-                scheduler.shutdown(wait=False)
-                break
-            if cmd_handler.report_requested and bot and repo and client and symbols:
-                daily_summary_job(bot, broker, repo, client, symbols)
-                cmd_handler.reset_report()
-            if cmd_handler.status_requested and bot:
-                status_text = _health.summary_text(schedule_interval_minutes=settings.schedule_interval_minutes) if _health else "헬스 모니터 미초기화"
-                bot.send_message(f"\U0001f4cb <b>봇 상태</b>\n<pre>{status_text}</pre>")
-                cmd_handler.reset_status()
-            if cmd_handler.info_requested and bot and settings:
-                _send_market_info(bot, settings)
-                cmd_handler.reset_info()
-            if cmd_handler.criteria_requested and bot and settings:
-                _send_strategy_criteria(bot, settings)
-                cmd_handler.reset_criteria()
-            if cmd_handler.tuning_requested and bot and repo and settings:
-                _send_tuning_history(bot, repo, settings)
-                cmd_handler.reset_tuning()
-            # /ask 질문 처리
-            if _ai_assistant and bot:
-                for question in cmd_handler.get_pending_questions():
-                    context = _build_market_context()
-                    answer = _ai_assistant.ask(question, context=context)
-                    remaining = _ai_assistant.remaining_today
-                    bot.send_message(
-                        f"\U0001f916 <b>AI 답변</b>\n\n"
-                        f"{markdown_to_telegram_html(answer)}\n\n"
-                        f"<i>남은 횟수: {remaining}회/일</i>"
-                    )
-        except Exception:
-            logger.exception("명령어 폴링 중 에러 발생")
+    runtime_command_loop(
+        cmd_handler,
+        scheduler,
+        bot,
+        logger=logger,
+        broker=broker,
+        repo=repo,
+        client=client,
+        symbols=symbols,
+        settings=settings,
+        stop_event=stop_event,
+        daily_summary_job=daily_summary_job,
+        health=_health,
+        get_runtime_state=_get_runtime_state,
+        send_market_info=_send_market_info,
+        send_strategy_criteria=_send_strategy_criteria,
+        send_tuning_history=_send_tuning_history,
+        ai_assistant=_ai_assistant,
+        build_market_context=_build_market_context,
+        markdown_to_telegram_html=markdown_to_telegram_html,
+    )
 
 
 def main():
@@ -1263,7 +442,7 @@ def main():
     args = parser.parse_args()
 
     settings = get_settings()
-    setup_logger("cryptolight.main", settings.log_level, settings.log_file)
+    setup_logger("cryptolight", settings.log_level, settings.log_file)
 
     once_mode = args.once or settings.schedule_interval_minutes == 0
 
@@ -1271,151 +450,18 @@ def main():
     logger.info("거래 모드: %s", settings.trade_mode)
     logger.info("대상 종목: %s", settings.symbol_list)
 
-    # 텔레그램 봇 초기화
-    bot = None
-    cmd_handler = None
-    if settings.telegram_bot_token and settings.telegram_chat_id:
-        bot = TelegramBot(settings.telegram_bot_token, settings.telegram_chat_id, notification_level=settings.notification_level)
-        global _cmd_handler
-        cmd_handler = CommandHandler(
-            settings.telegram_bot_token,
-            settings.telegram_chat_id,
-            poll_timeout_seconds=settings.telegram_poll_timeout_seconds,
-            request_timeout_seconds=settings.telegram_request_timeout_seconds,
-        )
-        _cmd_handler = cmd_handler
-        bot.send_startup(settings.symbol_list, settings.trade_mode)
-        logger.info("텔레그램 봇 연결됨")
-    else:
-        logger.warning("텔레그램 설정 없음 — 알림 비활성화")
-
-    # 명령어 확인 (킬스위치)
-    if cmd_handler:
-        cmd_handler.poll_commands()
-        if cmd_handler.kill_switch:
-            logger.warning("킬스위치 활성 — 실행 중단")
-            if bot:
-                bot.close()
-            cmd_handler.close()
-            return
-
-    # 브로커 초기화
-    broker = None
-    repo = TradeRepository(db_path=Path(settings.db_path))
-    _load_active_strategy_parameters(repo, settings, logger)
-    risk_guard = RiskGuard(
-        max_order_amount_krw=settings.max_order_amount_krw,
-        daily_loss_limit_krw=settings.daily_loss_limit_krw,
-        max_positions=settings.max_positions,
-        stop_loss_pct=settings.stop_loss_pct,
-        take_profit_pct=settings.take_profit_pct,
-        trailing_stop_pct=settings.trailing_stop_pct,
-        repo=repo,
-        commission_rate=settings.commission_rate,
+    session = runtime_bootstrap_runtime(
+        settings,
+        logger=logger,
+        load_active_strategy_parameters=_load_active_strategy_parameters,
     )
+    if session is None:
+        return
 
-    client = UpbitClient(settings.upbit_access_key, settings.upbit_secret_key)
+    bot, cmd_handler, repo, risk_guard, client, broker, symbols = _apply_runtime_session(session)
 
-    # 캔들 캐시, 쿨다운, 포지션 사이징, 헬스체크, 국면감지, 거래량필터 초기화
-    global _candle_cache, _cooldown, _position_sizer, _health, _regime_detector, _volume_filter, _ai_assistant
-    _health = HealthMonitor()
-    _regime_detector = MarketRegime()
-    _volume_filter = VolumeFilter()
-    if settings.google_api_key:
-        _ai_assistant = AIAssistant(
-            api_key=settings.google_api_key,
-            model=settings.gemini_model,
-            daily_limit=settings.ask_daily_limit,
-        )
-        logger.info("AI 어시스턴트 활성화 (모델: %s, 일일 %d회 제한)", settings.gemini_model, settings.ask_daily_limit)
-    _candle_cache = CandleCache(ttl_seconds=settings.candle_cache_ttl)
-    _cooldown = TradeCooldown(
-        cooldown_seconds=settings.trade_cooldown_seconds,
-        max_orders_per_hour=settings.max_orders_per_hour,
-    )
-    _position_sizer = PositionSizer(
-        method=settings.position_sizing_method,
-        fixed_amount=settings.max_order_amount_krw,
-        risk_pct=settings.position_risk_pct,
-        max_amount=settings.absolute_max_order_krw,
-    )
-    logger.info(
-        "포지션 사이징: %s, 쿨다운: %ds, 캔들캐시 TTL: %ds",
-        settings.position_sizing_method, settings.trade_cooldown_seconds, settings.candle_cache_ttl,
-    )
-
-    if settings.trade_mode == "paper":
-        broker = PaperBroker(initial_balance=settings.paper_initial_balance, repo=repo, commission_rate=settings.commission_rate)
-        logger.info("Paper trading 초기화: 초기 자금 %s KRW", f"{broker.initial_balance:,.0f}")
-    elif settings.trade_mode == "live":
-        broker = LiveBroker(
-            client=client, repo=repo,
-            absolute_max_order_krw=settings.absolute_max_order_krw,
-            commission_rate=settings.commission_rate,
-        )
-        logger.info("Live trading 초기화 (하드캡: %s KRW)", f"{settings.absolute_max_order_krw:,.0f}")
-        if bot:
-            bot.send_message("\u26a0\ufe0f <b>LIVE 모드</b>로 실행 중입니다.")
-
-    logger.info(
-        "리스크 설정: 최대주문 %s, 일일손실한도 %s, 손절 %s%%, 익절 %s%%",
-        f"{settings.max_order_amount_krw:,.0f}",
-        f"{settings.daily_loss_limit_krw:,.0f}",
-        settings.stop_loss_pct,
-        settings.take_profit_pct,
-    )
-
-    # ── 자동 종목 스크리닝 ──
-    symbols = settings.symbol_list
-    if settings.auto_select_symbols:
-        logger.info("자동 종목 스크리닝 시작 (상위 %d개, 최소 거래대금 %s원)",
-                     settings.top_volume_limit, f"{settings.min_daily_volume_krw:,}")
-        try:
-            screening = run_screening_pipeline(
-                client=client,
-                strategy_name=settings.strategy_name,
-                top_limit=settings.top_volume_limit,
-                min_volume_krw=settings.min_daily_volume_krw,
-                min_sharpe=settings.min_backtest_sharpe,
-                max_correlation=settings.max_correlation,
-                max_positions=settings.max_positions,
-                candle_interval=settings.candle_interval,
-            )
-            if screening.selected:
-                symbols = screening.selected
-                logger.info("자동 스크리닝 결과: %s", symbols)
-                if bot:
-                    details_lines = []
-                    for sym in screening.selected:
-                        d = screening.backtest_details.get(sym, {})
-                        if d and not d.get("skipped"):
-                            details_lines.append(
-                                f"  {sym}: Sharpe={d['sharpe']:.4f}, "
-                                f"수익={d['return_pct']:+.2f}%, "
-                                f"거래={d['total_trades']}회"
-                            )
-                        else:
-                            details_lines.append(f"  {sym}: 백테스트 데이터 없음")
-                    msg = (
-                        f"후보: {len(screening.candidates)}개\n"
-                        f"백테스트 통과: {len(screening.backtest_passed)}개\n"
-                        f"상관관계 제외: {screening.correlation_removed}\n"
-                        f"최종 선정:\n" + "\n".join(details_lines)
-                    )
-                    bot.send_message(
-                        f"\U0001f50d <b>자동 종목 스크리닝</b>\n<pre>{html_mod.escape(msg)}</pre>"
-                    )
-            else:
-                logger.warning("자동 스크리닝 결과 없음 — 기본 종목 사용: %s", settings.symbol_list)
-        except Exception:
-            logger.exception("자동 스크리닝 실패 — 기본 종목 사용")
-
-    # 보유 종목이 스크리닝에서 빠졌더라도 symbols에 포함 (손절/익절 체크 보장)
-    if broker:
-        for pos_sym, pos in broker.get_positions().items():
-            if pos.quantity > 0 and pos_sym not in symbols:
-                symbols.append(pos_sym)
-                logger.info("보유 종목 자동 추가: %s (스크리닝 대상 외)", pos_sym)
+    if bot:
+        bot.send_startup(_active_symbols, settings.trade_mode)
 
     # ── 1회 실행 모드 ──
     if once_mode:
@@ -1434,146 +480,45 @@ def main():
         logger.info("cryptolight 종료")
         return
 
-    # ── 스케줄러 모드 ──
-    logger.info("스케줄러 모드: 전략 분석 %d분 / 가격 모니터링 %d분", settings.schedule_interval_minutes, settings.price_monitor_interval_minutes)
-    scheduler = BlockingScheduler(timezone=settings.app_timezone)
     global _scheduler
-    _scheduler = scheduler
-
-    scheduler.add_job(
-        strategy_job,
-        "interval",
-        minutes=settings.schedule_interval_minutes,
-        max_instances=1,
-        misfire_grace_time=60,
-        args=[client, bot, broker, risk_guard, symbols, settings],
-        id="strategy",
-        next_run_time=None,  # 첫 실행은 아래에서 즉시 수행
-    )
-
-    # 가격 모니터링: 손절/익절/트레일링 스톱을 짧은 주기로 체크
-    if broker and risk_guard and settings.price_monitor_interval_minutes > 0:
-        scheduler.add_job(
-            price_monitor_job,
-            "interval",
-            minutes=settings.price_monitor_interval_minutes,
-            max_instances=1,
-            misfire_grace_time=30,
-            args=[client, bot, broker, risk_guard, symbols],
-            id="price_monitor",
-        )
-        logger.info("가격 모니터링: %d분 간격 (손절/익절 체크)", settings.price_monitor_interval_minutes)
-
-    # ── WebSocket 실시간 가격 스트림 ──
     global _price_stream
-    if broker and risk_guard and settings.enable_websocket:
-        ws_callback = _make_ws_price_callback(broker, risk_guard, bot)
-        _price_stream = PriceStream(
-            symbols=symbols,
-            on_price_callback=ws_callback,
-            on_connect=_ws_on_connect,
-            on_disconnect=_ws_on_disconnect,
-            reconnect_max_seconds=settings.websocket_reconnect_max_seconds,
-        )
-        _price_stream.start()
-        logger.info("WebSocket 실시간 가격 스트림 활성화 (fallback: %d분 폴링)", settings.price_monitor_interval_minutes)
-
-    # 명령어 폴링: 전용 스레드에서 long polling (즉시 응답)
-    cmd_stop_event = threading.Event()
-    if cmd_handler:
-        cmd_thread = threading.Thread(
-            target=command_loop,
-            args=[cmd_handler, scheduler, bot, broker, repo, client, symbols, settings, cmd_stop_event],
-            daemon=True,
-            name="command-poll",
-        )
-        cmd_thread.start()
-
-    if bot:
-        scheduler.add_job(
-            daily_summary_job,
-            "cron",
-            hour=settings.daily_summary_hour,
-            minute=settings.daily_summary_minute,
-            args=[bot, broker, repo, client, symbols],
-            id="daily_summary",
-        )
-
-    # 자기개선 루프: 매주 일요일 03:00 KST
-    if settings.enable_auto_optimization:
-        scheduler.add_job(
-            self_improvement_job,
-            "cron",
-            day_of_week=settings.self_improvement_day_of_week,
-            hour=settings.self_improvement_hour,
-            minute=settings.self_improvement_minute,
-            args=[client, repo, bot, settings],
-            id="self_improvement",
-        )
-        logger.info(
-            "전략 전환 루프 활성화: %s %02d:%02d 실행 (%s)",
-            settings.self_improvement_day_of_week,
-            settings.self_improvement_hour,
-            settings.self_improvement_minute,
-            settings.app_timezone,
-        )
-
-    if settings.enable_auto_parameter_tuning and settings.parameter_tuning_interval_hours > 0:
-        scheduler.add_job(
-            parameter_tuning_job,
-            "interval",
-            hours=settings.parameter_tuning_interval_hours,
-            max_instances=1,
-            misfire_grace_time=300,
-            args=[client, repo, bot, symbols, settings],
-            id="parameter_tuning",
-        )
-        logger.info(
-            "파라미터 조정 루프 활성화: %d시간마다 실행, 쿨다운 %d시간",
-            settings.parameter_tuning_interval_hours,
-            settings.parameter_tuning_cooldown_hours,
-        )
-
-    # ── 웹 대시보드 ──
-    if settings.enable_web:
-        try:
-            import uvicorn
-            from cryptolight.web.app import app as web_app, configure as web_configure
-
-            web_configure(
-                market_snapshots=_market_snapshots,
-                broker=broker,
-                repo=repo,
-                health=_health,
-                settings=settings,
-            )
-            web_thread = threading.Thread(
-                target=uvicorn.run,
-                kwargs={"app": web_app, "host": settings.web_host, "port": settings.web_port, "log_level": "warning"},
-                daemon=True,
-                name="web-dashboard",
-            )
-            web_thread.start()
-            logger.info("웹 대시보드 시작: http://%s:%d", settings.web_host, settings.web_port)
-        except ImportError:
-            logger.warning("웹 대시보드 비활성: fastapi/uvicorn 미설치 (pip install cryptolight[web])")
-
-    # Graceful shutdown
-    def _shutdown(signum, _frame):
-        sig_name = signal.Signals(signum).name
-        logger.info("시그널 수신: %s — graceful shutdown", sig_name)
-        scheduler.shutdown(wait=False)
-
-    signal.signal(signal.SIGTERM, _shutdown)
-    signal.signal(signal.SIGINT, _shutdown)
-
-    # 스케줄러 시작 전 1회 즉시 실행
-    strategy_job(client, bot, broker, risk_guard, symbols, settings)
+    services = runtime_setup_runtime_services(
+        settings,
+        logger=logger,
+        client=client,
+        bot=bot,
+        broker=broker,
+        risk_guard=risk_guard,
+        symbols=symbols,
+        cmd_handler=cmd_handler,
+        repo=repo,
+        health=_health,
+        market_snapshots=_market_snapshots,
+        get_market_snapshots_copy=_get_market_snapshots_copy,
+        get_runtime_state=_get_runtime_state,
+        strategy_job=strategy_job,
+        price_monitor_job=price_monitor_job,
+        make_ws_price_callback=_make_ws_price_callback,
+        command_loop=command_loop,
+        daily_summary_job=daily_summary_job,
+        self_improvement_job=self_improvement_job,
+        parameter_tuning_job=parameter_tuning_job,
+    )
+    _scheduler = services.scheduler
+    _price_stream = services.price_stream
 
     try:
-        # next_run_time을 설정하여 다음 interval부터 실행되도록
-        scheduler.reschedule_job("strategy", trigger="interval", minutes=settings.schedule_interval_minutes)
-        scheduler.start()
+        runtime_start_scheduler_runtime(
+            services,
+            settings,
+            logger=logger,
+            strategy_job=strategy_job,
+            client=client,
+            bot=bot,
+            broker=broker,
+            risk_guard=risk_guard,
+            symbols=symbols,
+        )
     finally:
         logger.info("스케줄러 종료 — 리소스 정리")
         _scheduler = None
