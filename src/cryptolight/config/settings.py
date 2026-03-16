@@ -1,7 +1,30 @@
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings
+
+
+DEFAULT_RUNTIME_ENV_PATH = Path.home() / ".config" / "cryptolight" / "cryptolight.env"
+LEGACY_RUNTIME_ENV_PATH = Path.home() / ".config" / "cryptolight" / "env"
+
+
+def _resolve_env_file() -> str | None:
+    candidates: list[Path] = []
+
+    override = os.environ.get("CRYPTOLIGHT_ENV_FILE", "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    candidates.append(DEFAULT_RUNTIME_ENV_PATH)
+    candidates.append(LEGACY_RUNTIME_ENV_PATH)
+    candidates.append(Path(".env"))
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 class Settings(BaseSettings):
@@ -114,7 +137,7 @@ class Settings(BaseSettings):
     parameter_tuning_n_folds: int = 3  # 파라미터 조정 Walk-Forward fold 수
     parameter_tuning_min_wf_consistency: float = 66.7  # 파라미터 조정 최소 WF 일관성
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file_encoding": "utf-8"}
 
     @property
     def symbol_list(self) -> list[str]:
@@ -127,4 +150,7 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    env_file = _resolve_env_file()
+    if env_file:
+        return Settings(_env_file=env_file)
     return Settings()

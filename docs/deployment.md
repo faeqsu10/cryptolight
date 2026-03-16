@@ -28,31 +28,24 @@ docker compose restart
 
 호스트 재부팅 시 자동 복구되는 systemd 서비스 설정.
 
+### 운영 설정 파일 준비
+
+```bash
+mkdir -p ~/.config/cryptolight
+cp /home/faeqsu10/projects/cryptolight/.env.example ~/.config/cryptolight/cryptolight.env
+chmod 600 ~/.config/cryptolight/cryptolight.env
+```
+
+서비스는 `CRYPTOLIGHT_ENV_FILE=%h/.config/cryptolight/cryptolight.env`를 통해 이 파일을 읽는다. 운영 비밀값과 실행 설정을 저장소 밖에 두려는 목적이다.
+
 ### 서비스 파일 생성
 
 ```bash
 mkdir -p ~/.config/systemd/user
-
-cat > ~/.config/systemd/user/cryptolight.service << 'EOF'
-[Unit]
-Description=cryptolight trading bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=%h/projects/cryptolight
-ExecStart=%h/projects/cryptolight/.venv/bin/python -m cryptolight.main
-Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=default.target
-EOF
+cp /home/faeqsu10/projects/cryptolight/deploy/systemd/cryptolight.service ~/.config/systemd/user/cryptolight.service
 ```
 
-> `WorkingDirectory`와 `ExecStart` 경로를 실제 설치 경로에 맞게 수정하세요.
+템플릿 경로는 저장소 안에 남겨두는 편이 유지보수에 낫다. 서비스 정의를 바꿀 때 문서와 실제 런타임 파일이 같이 움직이기 때문이다. 설치 경로가 다르면 `WorkingDirectory`와 `ExecStart`만 수정한다.
 
 ### 서비스 등록 및 시작
 
@@ -81,9 +74,11 @@ systemctl --user restart cryptolight.service
 systemctl --user stop cryptolight.service
 ```
 
+운영 로그와 장애 진단 순서는 [운영 가이드](operations.md)를 참고.
+
 ## 웹 대시보드 설정
 
-`.env`에 아래 항목을 추가하면 봇 실행 시 웹 대시보드가 함께 시작됩니다.
+운영 기준 설정 파일 `~/.config/cryptolight/cryptolight.env`에 아래 항목을 추가하면 봇 실행 시 웹 대시보드가 함께 시작된다.
 
 ```bash
 ENABLE_WEB=true

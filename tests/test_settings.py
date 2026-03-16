@@ -1,8 +1,11 @@
 """Settings 설정 검증 테스트"""
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from cryptolight.config.settings import Settings
+from cryptolight.config import settings as settings_module
+from cryptolight.config.settings import Settings, get_settings
 
 
 def test_default_settings(monkeypatch):
@@ -59,3 +62,32 @@ def test_symbol_list():
 def test_ensemble_strategy_list():
     s = Settings(ensemble_strategies="rsi,macd")
     assert s.ensemble_strategy_list == ["rsi", "macd"]
+
+
+def test_get_settings_prefers_external_env_file(monkeypatch, tmp_path: Path):
+    env_file = tmp_path / "cryptolight.env"
+    env_file.write_text("TRADE_MODE=live\nTARGET_SYMBOLS=KRW-BTC,KRW-XRP\n", encoding="utf-8")
+
+    monkeypatch.setenv("CRYPTOLIGHT_ENV_FILE", str(env_file))
+    get_settings.cache_clear()
+    try:
+        s = get_settings()
+        assert s.trade_mode == "live"
+        assert s.symbol_list == ["KRW-BTC", "KRW-XRP"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_get_settings_uses_standard_runtime_env_path(monkeypatch, tmp_path: Path):
+    env_file = tmp_path / "cryptolight.env"
+    env_file.write_text("TRADE_MODE=live\n", encoding="utf-8")
+
+    monkeypatch.delenv("CRYPTOLIGHT_ENV_FILE", raising=False)
+    monkeypatch.setattr(settings_module, "DEFAULT_RUNTIME_ENV_PATH", env_file)
+    monkeypatch.setattr(settings_module, "LEGACY_RUNTIME_ENV_PATH", tmp_path / "legacy.env")
+    get_settings.cache_clear()
+    try:
+        s = get_settings()
+        assert s.trade_mode == "live"
+    finally:
+        get_settings.cache_clear()

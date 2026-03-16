@@ -1,8 +1,10 @@
 # 설정 가이드
 
-cryptolight을 처음 설정하는 경우 이 문서를 따라 진행하세요.
+cryptolight을 처음 설정하는 경우 이 문서를 따라 진행하세요. 로컬 개발은 저장소 루트의 `.env`를 써도 되지만, 장기 운영은 `~/.config/cryptolight/cryptolight.env`를 권장합니다. 운영 배치는 [운영 가이드](operations.md)를 참고하세요.
 
 ## 1. 업비트 API 키 발급
+
+시작 전에 운영 환경이라면 `~/.config/cryptolight/cryptolight.env`를 만들고 그 파일에 설정을 채우는 방식을 권장한다. 로컬 개발만 할 때는 저장소 루트 `.env`를 그대로 사용해도 된다.
 
 1. [업비트](https://upbit.com) 로그인
 2. **마이페이지 > Open API 관리** 이동
@@ -45,6 +47,14 @@ TELEGRAM_BOT_TOKEN=발급받은_봇_토큰
 TELEGRAM_CHAT_ID=확인한_chat_id
 ```
 
+운영 파일을 따로 두고 싶다면 아래처럼 외부 파일로 옮기면 된다.
+
+```bash
+mkdir -p ~/.config/cryptolight
+cp .env.example ~/.config/cryptolight/cryptolight.env
+chmod 600 ~/.config/cryptolight/cryptolight.env
+```
+
 ## 4. 첫 실행
 
 ```bash
@@ -53,7 +63,7 @@ python -m cryptolight.main
 
 기본 설정(`TRADE_MODE=paper`)으로 실행하면:
 - 가상 잔고 100만원으로 시뮬레이션 시작
-- 5분마다 KRW-BTC, KRW-ETH 분석
+- 60분마다 전략 분석, 5분 폴링 또는 WebSocket으로 손절/익절 감시
 - 매수/매도 시그널 발생 시 텔레그램으로 알림
 - 실제 주문은 실행되지 않음
 

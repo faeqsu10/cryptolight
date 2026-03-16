@@ -1,0 +1,19 @@
+[Unit]
+Description=cryptolight trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/cryptolight
+Environment=HOME=%h
+Environment=PYTHONUNBUFFERED=1
+Environment=CRYPTOLIGHT_ENV_FILE=%h/.config/cryptolight/cryptolight.env
+ExecStart=%h/projects/cryptolight/.venv/bin/python -m cryptolight.main
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

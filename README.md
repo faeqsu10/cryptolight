@@ -4,7 +4,7 @@
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![Tests: 216 passing](https://img.shields.io/badge/tests-216%20passing-brightgreen)
+![Tests: 240 passing](https://img.shields.io/badge/tests-240%20passing-brightgreen)
 ![Trade Mode: Paper](https://img.shields.io/badge/trade%20mode-paper%20(default)-orange)
 
 > 멀티팩터 스코어 전략 + 시장 국면 감지 + 자동 리스크 관리 + 자기개선 루프
@@ -26,7 +26,7 @@ graph LR
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,web]"
-cp .env.example .env    # 필수 4개 키 입력
+cp .env.example .env    # 로컬 개발용
 python -m cryptolight.main
 ```
 
@@ -43,9 +43,11 @@ python -m cryptolight.main
 
 ## 설정
 
-`.env.example`을 복사하여 `.env`를 생성합니다. 필수 키 4개만 채우면 기본값으로 바로 실행 가능합니다.
+로컬 개발은 저장소 루트의 `.env`를 그대로 써도 된다. 운영 환경에서는 `~/.config/cryptolight/cryptolight.env`를 권장한다. 런타임은 `CRYPTOLIGHT_ENV_FILE` 환경변수, `~/.config/cryptolight/cryptolight.env`, 레거시 경로 `~/.config/cryptolight/env`, 저장소 루트 `.env` 순서로 설정 파일을 찾는다.
 
-모든 설정 항목은 `.env.example`에 카테고리별 주석과 함께 정리되어 있습니다.
+운영 절차와 외부 설정 파일 배치는 [운영 가이드](docs/operations.md)에 정리되어 있다. 모든 설정 항목은 `.env.example`에 카테고리별 주석과 함께 들어 있다.
+
+코드 구조와 런타임 계층 설명은 [아키텍처 가이드](docs/architecture.md)를 참고.
 
 <details>
 <summary><strong>주요 설정 항목</strong></summary>
@@ -118,8 +120,8 @@ STRATEGY_NAME=ensemble python -m cryptolight.main   # 다수결 앙상블
 |------|----------|
 | `silent` | 킬스위치, 에러만 |
 | `minimal` | + 매수/매도 체결, 손절/익절 |
-| `normal` | + 일일 요약, 시작/종료 알림 |
-| `verbose` | + 시그널, 주기 현황, 매수 차단 |
+| `normal` | + 일일 요약, 시작/종료, 시그널, 주기 현황 |
+| `verbose` | + 매수 차단, 튜닝, 스크리닝 |
 
 체결/손절/익절 알림에는 매수평단, 수량, 손익률, 손익금액이 포함됩니다.
 
@@ -133,6 +135,12 @@ ENABLE_WEB=true WEB_PORT=8090 python -m cryptolight.main
 ```
 
 종목별 가격/RSI/시그널, 포트폴리오 손익, 시장 국면, 거래 내역을 한눈에 확인. HTTP Basic Auth 지원 (`WEB_USERNAME`, `WEB_PASSWORD` 설정).
+
+## 로그 확인
+
+- 기본 실행 로그는 `systemd user service` 기준 `journalctl --user -u cryptolight.service -f`
+- 파일 로그는 `LOG_FILE=logs/cryptolight.log` 로 회전 저장
+- 민감 정보(토큰/API 키)는 로그 포매터에서 마스킹
 
 ## 백테스트
 
@@ -178,12 +186,12 @@ docker compose up -d
 systemctl --user status cryptolight.service
 ```
 
-상세 배포 가이드는 [배포 문서](docs/deployment.md)를 참고.
+상세 배포 가이드는 [배포 문서](docs/deployment.md), 운영 명령과 로그 확인은 [운영 가이드](docs/operations.md)를 참고.
 
 ## 개발
 
 ```bash
-pytest                # 전체 테스트 (216개)
+pytest                # 전체 테스트 (현재 240개)
 ruff check src/       # 린트
 ruff format src/      # 포맷
 ```
