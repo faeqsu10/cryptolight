@@ -18,6 +18,7 @@ def client():
                 "regime": "trending",
                 "adx": 30.0,
                 "weight": 1.0,
+                "updated_at": "2026-03-15T16:56:13",
             }
         },
         broker=None,
@@ -52,6 +53,7 @@ class TestMarketAPI:
         assert data["KRW-BTC"]["rsi"] == 45.0
         assert data["KRW-BTC"]["action"] == "hold"
         assert data["KRW-BTC"]["regime"] == "trending"
+        assert data["KRW-BTC"]["updated_at"] == "2026-03-15T16:56:13"
 
     def test_empty_market(self):
         configure(market_snapshots={}, broker=None, repo=None, health=None, settings=None)
@@ -59,6 +61,33 @@ class TestMarketAPI:
         resp = c.get("/api/market")
         assert resp.status_code == 200
         assert resp.json() == {}
+
+    def test_market_snapshot_getter_overrides_static_data(self):
+        configure(
+            market_snapshots={},
+            market_snapshot_getter=lambda: {
+                "KRW-NOM": {
+                    "price": 7,
+                    "change": -3.2,
+                    "rsi": 37.4,
+                    "action": "buy",
+                    "regime": "sideways",
+                    "adx": 19.8,
+                    "confidence": 0.6,
+                    "indicators": {"buy_score": 45},
+                    "updated_at": "2026-03-15T16:56:13",
+                }
+            },
+            broker=None,
+            repo=None,
+            health=None,
+            settings=None,
+        )
+        c = TestClient(app)
+        resp = c.get("/api/market")
+        data = resp.json()
+        assert "KRW-NOM" in data
+        assert data["KRW-NOM"]["updated_at"] == "2026-03-15T16:56:13"
 
 
 class TestPortfolioAPI:
@@ -106,6 +135,66 @@ class TestStatusAPI:
         assert data["health"]["total_cycles"] == 2
         assert data["health"]["consecutive_errors"] == 0
         assert data["health"]["healthy"] is True
+        assert data["health"]["last_strategy_success"] is True
+
+    def test_runtime_state_getter_overrides_static_status(self):
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.strategy_name = "score"
+        settings.trade_mode = "paper"
+        settings.symbol_list = ["KRW-BTC"]
+        settings.schedule_interval_minutes = 60
+        settings.web_username = ""
+        settings.web_password = ""
+
+        configure(
+            market_snapshots={},
+            broker=None,
+            repo=None,
+            health=None,
+            settings=settings,
+            runtime_state_getter=lambda: {
+                "strategy_name": "ensemble",
+                "trade_mode": "paper",
+                "symbol_list": ["KRW-NOM", "KRW-ETH"],
+                "schedule_interval_minutes": 15,
+            },
+        )
+        c = TestClient(app)
+        resp = c.get("/api/status")
+        data = resp.json()
+
+        assert data["strategy"] == "ensemble"
+        assert data["symbols"] == ["KRW-NOM", "KRW-ETH"]
+        assert data["interval_minutes"] == 15
+
+    def test_uses_runtime_market_symbols_when_available(self):
+        from unittest.mock import MagicMock
+
+        settings = MagicMock()
+        settings.strategy_name = "score"
+        settings.trade_mode = "paper"
+        settings.symbol_list = ["KRW-BTC", "KRW-ETH"]
+        settings.schedule_interval_minutes = 60
+        settings.web_username = ""
+        settings.web_password = ""
+
+        configure(
+            market_snapshots={
+                "KRW-NOM": {"price": 7.0, "updated_at": "2026-03-15T16:56:13"},
+                "KRW-DKA": {"price": 8.1, "updated_at": "2026-03-15T16:56:17"},
+            },
+            broker=None,
+            repo=None,
+            health=None,
+            settings=settings,
+        )
+        c = TestClient(app)
+        resp = c.get("/api/status")
+        data = resp.json()
+        assert data["symbols"] == ["KRW-NOM", "KRW-DKA"]
+        assert data["market_updated_at"] == "2026-03-15T16:56:17"
 
 
 class TestOpenAPIDisabled:

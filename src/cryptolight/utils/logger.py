@@ -34,9 +34,11 @@ def setup_logger(
     logger = logging.getLogger(name)
 
     if logger.handlers:
+        logger.setLevel(getattr(logging, level.upper(), logging.INFO))
         return logger
 
     logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    logger.propagate = False
 
     fmt = RedactingFormatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
 

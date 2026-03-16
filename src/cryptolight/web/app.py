@@ -3,6 +3,7 @@
 import logging
 import secrets
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -39,6 +40,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS origin은 configure()에서 동적으로 설정
 _cors_configured = False
+_auth_warning_emitted = False
 
 
 @dataclass(frozen=True)
@@ -58,9 +60,12 @@ _refs: dict = {}
 
 def verify_credentials(credentials: HTTPBasicCredentials | None = Depends(security)):
     """HTTP Basic Auth 검증. username/password 미설정 시 경고 로그 후 통과."""
+    global _auth_warning_emitted
     ws: WebSettings = _refs.get("settings", WebSettings())
     if not ws.username or not ws.password:
-        logger.warning("웹 대시보드 인증 미설정 — WEB_USERNAME/WEB_PASSWORD 환경변수를 설정하세요")
+        if not _auth_warning_emitted:
+            logger.warning("웹 대시보드 인증 미설정 — WEB_USERNAME/WEB_PASSWORD 환경변수를 설정하세요")
+            _auth_warning_emitted = True
         return  # 인증 미설정 시 경고 후 통과 (로컬 개발용)
     if credentials is None:
         raise HTTPException(
@@ -80,17 +85,21 @@ def verify_credentials(credentials: HTTPBasicCredentials | None = Depends(securi
 
 def configure(
     market_snapshots: dict,
+    market_snapshot_getter=None,
     broker=None,
     repo=None,
     health=None,
     settings=None,
+    runtime_state_getter=None,
 ):
     """main.py에서 호출하여 데이터 참조를 주입한다."""
     global _cors_configured
     _refs["market_snapshots"] = market_snapshots
+    _refs["market_snapshot_getter"] = market_snapshot_getter
     _refs["broker"] = broker
     _refs["repo"] = repo
     _refs["health"] = health
+    _refs["runtime_state_getter"] = runtime_state_getter
     # 민감 정보 제외하고 필요한 설정만 전달
     if settings:
         _refs["settings"] = WebSettings(
@@ -124,18 +133,47 @@ def configure(
             _cors_configured = True
 
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, _: None = Depends(verify_credentials)):
+def _get_market_snapshots() -> dict:
+    getter = _refs.get("market_snapshot_getter")
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            logger.exception("시장 스냅샷 getter 실패")
+            return {}
+    return dict(_refs.get("market_snapshots", {}))
+
+
+def _get_runtime_state() -> dict:
     settings = _refs.get("settings", WebSettings())
-    return templates.TemplateResponse(request, "dashboard.html", {
+    state = {
         "strategy_name": settings.strategy_name,
         "trade_mode": settings.trade_mode,
+        "symbol_list": list(settings.symbol_list),
+        "schedule_interval_minutes": settings.schedule_interval_minutes,
+    }
+    getter = _refs.get("runtime_state_getter")
+    if callable(getter):
+        try:
+            runtime = getter() or {}
+            state.update(runtime)
+        except Exception:
+            logger.exception("런타임 상태 getter 실패")
+    return state
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request, _: None = Depends(verify_credentials)):
+    state = _get_runtime_state()
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "strategy_name": state["strategy_name"],
+        "trade_mode": state["trade_mode"],
     })
 
 
 @app.get("/api/market")
 async def api_market(_: None = Depends(verify_credentials)):
-    snapshots = dict(_refs.get("market_snapshots", {}))  # shallow copy for thread safety
+    snapshots = _get_market_snapshots()
     result = {}
     for sym, snap in snapshots.items():
         result[sym] = {
@@ -147,6 +185,7 @@ async def api_market(_: None = Depends(verify_credentials)):
             "adx": round(snap.get("adx", 0), 1),
             "confidence": round(snap.get("confidence", 0), 2) if snap.get("confidence") is not None else 0,
             "indicators": snap.get("indicators", {}),
+            "updated_at": snap.get("updated_at"),
         }
     return result
 
@@ -154,7 +193,7 @@ async def api_market(_: None = Depends(verify_credentials)):
 @app.get("/api/portfolio")
 async def api_portfolio(_: None = Depends(verify_credentials)):
     broker = _refs.get("broker")
-    snapshots = dict(_refs.get("market_snapshots", {}))  # shallow copy
+    snapshots = _get_market_snapshots()
 
     if broker is None:
         return {
@@ -215,7 +254,8 @@ async def api_trades(limit: int = Query(default=20, ge=1, le=100), _: None = Dep
 @app.get("/api/status")
 async def api_status(_: None = Depends(verify_credentials)):
     health = _refs.get("health")
-    settings = _refs.get("settings", WebSettings())
+    state = _get_runtime_state()
+    snapshots = _get_market_snapshots()
 
     health_data = {}
     if health:
@@ -224,13 +264,28 @@ async def api_status(_: None = Depends(verify_credentials)):
             "uptime_minutes": round(status.uptime_seconds / 60, 1),
             "total_cycles": status.total_cycles,
             "consecutive_errors": status.consecutive_errors,
-            "healthy": health.is_healthy(max_idle_seconds=settings.schedule_interval_minutes * 60 * 2 + 120),
+            "last_strategy_run_ago": status.to_dict()["last_strategy_run_ago"],
+            "last_strategy_success": status.last_strategy_success,
+            "healthy": health.is_healthy(max_idle_seconds=state["schedule_interval_minutes"] * 60 * 2 + 120),
         }
 
+    tracked_symbols = list(snapshots.keys()) or list(state["symbol_list"])
+    market_updated_at = None
+    market_age_seconds = None
+    snapshot_updates = [snap.get("updated_at") for snap in snapshots.values() if isinstance(snap, dict) and snap.get("updated_at")]
+    if snapshot_updates:
+        market_updated_at = max(snapshot_updates)
+        try:
+            market_age_seconds = round((datetime.now() - datetime.fromisoformat(market_updated_at)).total_seconds(), 1)
+        except ValueError:
+            market_age_seconds = None
+
     return {
-        "strategy": settings.strategy_name,
-        "trade_mode": settings.trade_mode,
-        "symbols": list(settings.symbol_list),
-        "interval_minutes": settings.schedule_interval_minutes,
+        "strategy": state["strategy_name"],
+        "trade_mode": state["trade_mode"],
+        "symbols": tracked_symbols,
+        "interval_minutes": state["schedule_interval_minutes"],
         "health": health_data,
+        "market_updated_at": market_updated_at,
+        "market_age_seconds": market_age_seconds,
     }

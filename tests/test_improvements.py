@@ -186,6 +186,39 @@ class TestDailyPnl:
         assert pnl["realized_pnl"] == pytest.approx(949.5)
         repo.close()
 
+    def test_sell_day_uses_prior_day_cost_basis(self, tmp_path):
+        """전일 매수분을 오늘 매도해도 오늘 실현손익이 정확해야 한다."""
+        repo = TradeRepository(db_path=tmp_path / "test.db")
+
+        yesterday_buy = TradeRecord(
+            symbol="KRW-BTC",
+            side="buy",
+            price=50000000.0,
+            quantity=0.001,
+            amount_krw=50000.0,
+            commission=25.0,
+            reason="carry",
+            timestamp="2026-03-14T23:59:00",
+        )
+        today_sell = TradeRecord(
+            symbol="KRW-BTC",
+            side="sell",
+            price=51000000.0,
+            quantity=0.001,
+            amount_krw=51000.0,
+            commission=25.5,
+            reason="carry-close",
+            timestamp="2026-03-15T09:00:00",
+        )
+        repo.save_trade(yesterday_buy)
+        repo.save_trade(today_sell)
+
+        pnl = repo.get_daily_pnl("2026-03-15")
+        assert pnl["total_bought"] == 0.0
+        assert pnl["total_sold"] == 51000.0
+        assert pnl["realized_pnl"] == pytest.approx(974.5)
+        repo.close()
+
 
 # ── MEDIUM-2: Arena Sharpe ratio ──
 

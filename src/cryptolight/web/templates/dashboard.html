@@ -281,9 +281,39 @@ td{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.03);font-variant-nu
 /* Ensure tooltips in .meta don't get clipped by overflow:hidden on parent */
 .meta{overflow:visible}
 /* ─── End Tooltip System ─────────────────────────────────────────────────── */
+
+/* ─── Toast & Refresh Bar ────────────────────────────────────────────────── */
+#toast{
+  position:fixed; top:20px; right:20px; z-index:9999;
+  background:rgba(255,71,87,0.9); color:#fff;
+  padding:12px 20px; border-radius:8px; font-size:0.9rem; font-weight:600;
+  box-shadow:0 4px 12px rgba(0,0,0,0.3); backdrop-filter:blur(10px);
+  transform:translateX(150%); transition:transform 0.3s cubic-bezier(0.175,0.885,0.32,1.275);
+}
+#toast.show{transform:translateX(0)}
+#toast.ok{background:rgba(0,212,170,0.9)}
+
+#refresh-bar-container{
+  position:fixed; top:0; left:0; right:0; height:3px; z-index:9998;
+  background:rgba(255,255,255,0.1);
+}
+#refresh-bar{
+  height:100%; width:0%; background:var(--accent);
+  transition:width 1s linear;
+}
+/* ─── Mobile Table View ─────────────────────────────────────────────────── */
+@media(max-width:600px){
+  table, thead, tbody, th, td, tr { display: block; }
+  thead tr { display: none; }
+  tr { margin-bottom: 12px; border: 1px solid var(--glass-border); border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02); }
+  td { padding: 4px 0; border: none; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center; }
+  td::before { content: attr(data-label); font-weight: 600; color: var(--text-dim); text-transform: uppercase; font-size: 0.75rem; }
+}
 </style>
 </head>
 <body>
+<div id="refresh-bar-container"><div id="refresh-bar"></div></div>
+<div id="toast"></div>
 <div class="bg-orbs"><div class="orb"></div><div class="orb"></div><div class="orb"></div></div>
 <div class="container">
   <header>
@@ -470,24 +500,75 @@ function tipHTML(key, sub) {
   return `<span class="tip-wrap" style="--tip-accent:${cfg.accent}"><button class="tip-btn" aria-label="${label}" aria-expanded="false" aria-describedby="${id}">i</button><div class="tip-box" role="tooltip" id="${id}"><div class="tip-inner"><div class="tip-title">${cfg.title}</div><div class="tip-body">${cfg.html}</div></div></div></span>`;
 }
 
+let _wasOffline = false;
+let _toastTimeout;
+function showToast(msg, isOk=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = isOk ? 'show ok' : 'show';
+  clearTimeout(_toastTimeout);
+  _toastTimeout = setTimeout(() => { t.className = t.className.replace('show', '').trim(); }, 3000);
+}
+
+async function fetchJson(url, opts){
+  const response = await fetch(url, opts);
+  if(!response.ok) throw new Error(`${url} ${response.status}`);
+  return response.json();
+}
+
 async function fetchAll(){
   try{
     const opts={credentials:'same-origin'};
-    const[market,portfolio,trades,status]=await Promise.all([
-      fetch('/api/market',opts).then(r=>r.json()),
-      fetch('/api/portfolio',opts).then(r=>r.json()),
-      fetch('/api/trades',opts).then(r=>r.json()),
-      fetch('/api/status',opts).then(r=>r.json()),
+    const results=await Promise.allSettled([
+      fetchJson('/api/market',opts),
+      fetchJson('/api/portfolio',opts),
+      fetchJson('/api/trades',opts),
+      fetchJson('/api/status',opts),
     ]);
-    renderMarket(market);
-    renderPortfolio(portfolio);
-    renderTrades(trades);
-    renderStatus(status);
-    renderRegime(market);
-    document.getElementById('updated-at').textContent='Last updated: '+new Date().toLocaleTimeString('ko-KR');
+    const [marketResult, portfolioResult, tradesResult, statusResult] = results;
+    let updated = false;
+
+    if (marketResult.status === 'fulfilled') {
+      renderMarket(marketResult.value);
+      renderRegime(marketResult.value);
+      updated = true;
+    }
+    if (portfolioResult.status === 'fulfilled') {
+      renderPortfolio(portfolioResult.value);
+      updated = true;
+    }
+    if (tradesResult.status === 'fulfilled') {
+      renderTrades(tradesResult.value);
+      updated = true;
+    }
+    if (statusResult.status === 'fulfilled') {
+      renderStatus(statusResult.value);
+      document.getElementById('updated-at').textContent=formatUpdatedAt(statusResult.value);
+      updated = true;
+    }
+
+    if(!updated) throw new Error('All dashboard requests failed');
+    if(_wasOffline) { showToast('서버 통신 복구됨', true); _wasOffline=false; }
+
+    const failedCount = results.filter(r => r.status === 'rejected').length;
+    if (failedCount) {
+      console.warn(`Partial dashboard refresh failure: ${failedCount}/4 endpoints failed`, results);
+    }
     // Re-bind tooltip interactions after DOM update
     bindTooltips();
-  }catch(e){console.error('Fetch error:',e)}
+  }catch(e){
+    console.error('Fetch error:',e);
+    if(!_wasOffline) { showToast('서버 통신 오류 / 연결 끊김'); _wasOffline=true; }
+  }
+}
+
+function formatUpdatedAt(status){
+  if(!status || !status.market_updated_at) {
+    return 'Source update: no market data yet';
+  }
+  const timePart = status.market_updated_at.substring(11,19);
+  const age = status.market_age_seconds != null ? `${status.market_age_seconds}s ago` : 'age unknown';
+  return `Source update: ${timePart} (${age})`;
 }
 
 function renderMarket(data){
@@ -501,6 +582,33 @@ function renderMarket(data){
     const rsiW=d.rsi!=null?Math.min(100,Math.max(0,d.rsi))+'%':'0%';
     const rc=d.rsi!=null?rsiColor(d.rsi):'var(--text-dim)';
     const action=d.action||'hold';
+    
+    let scoreHtml = '';
+    if (d.indicators && d.indicators.buy_score != null) {
+      const bScore = d.indicators.buy_score;
+      const sScore = d.indicators.sell_score || 0;
+      const scBuyW = Math.min(100, bScore) + '%';
+      
+      const macdTxt = d.indicators.macd_hist !== undefined ? (d.indicators.macd_hist>0?'Up':'Down') + ' ('+d.indicators.macd_hist.toFixed(2)+')' : 'N/A';
+      const bbTxt = d.indicators.bb_position !== undefined ? (d.indicators.bb_position*100).toFixed(0)+'%' : 'N/A';
+      const volTxt = d.indicators.volume_ratio !== undefined ? d.indicators.volume_ratio.toFixed(1)+'x' : 'N/A';
+      
+      const detailHtml = `<p><strong>MACD:</strong> ${macdTxt}<br>
+        <strong>BB:</strong> ${bbTxt}<br>
+        <strong>Vol:</strong> ${volTxt}</p>`;
+
+      const tooltipId = 'tip-score-'+sym.replace(/[^a-zA-Z0-9]/g,'_');
+      const tooltip = `<span class="tip-wrap" style="--tip-accent:var(--accent)"><button class="tip-btn" aria-label="스코어 설명" aria-expanded="false" aria-describedby="${tooltipId}">i</button><div class="tip-box" role="tooltip" id="${tooltipId}"><div class="tip-inner"><div class="tip-title">Score & Factors</div><div class="tip-body">${detailHtml}</div></div></div></span>`;
+
+      scoreHtml = `<div style="margin-top:12px; font-size:0.8rem; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center;">
+          <span>${tooltip} Buy Score: <strong style="color:var(--buy)">${bScore.toFixed(1)}</strong></span>
+          <span>Sell: <strong style="color:var(--sell)">${sScore.toFixed(1)}</strong></span>
+        </div>
+        <div class="rsi-bar" style="height:4px; margin-top:4px; background:rgba(255,255,255,.08);">
+          <div style="height:100%; width:${scBuyW}; background:var(--buy); transition:width .6s ease; border-radius:3px;"></div>
+        </div>`;
+    }
+
     return`<div class="card">
       <div class="card-title">${esc(sym)}</div>
       <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:4px">
@@ -513,6 +621,7 @@ function renderMarket(data){
         <span class="signal-badge ${esc(action)}">${esc(action)}${tipHTML('signal',action)}</span>
       </div>
       <div class="rsi-bar"><div class="rsi-fill" style="width:${rsiW};background:${rc}"></div></div>
+      ${scoreHtml}
     </div>`}).join('');
 }
 
@@ -539,20 +648,28 @@ function renderTrades(trades){
   tb.innerHTML=trades.map(t=>{
     const sc=t.side==='buy'?'side-buy':'side-sell';
     const ts=t.timestamp?t.timestamp.substring(5,16).replace('T',' '):'';
-    return`<tr><td>${ts}</td><td>${esc(t.symbol)}</td><td class="${sc}">${esc(t.side.toUpperCase())}</td><td>${fmtPrice(t.price)}</td><td>${fmt(t.amount_krw)}</td><td>${esc(t.reason||'')}</td></tr>`}).join('');
+    return`<tr><td data-label="Time">${ts}</td><td data-label="Symbol">${esc(t.symbol)}</td><td data-label="Side" class="${sc}">${esc(t.side.toUpperCase())}</td><td data-label="Price">${fmtPrice(t.price)}</td><td data-label="Amount">${fmt(t.amount_krw)}</td><td data-label="Reason">${esc(t.reason||'')}</td></tr>`}).join('');
 }
 
 function renderStatus(d){
   const el=document.getElementById('status-info');
   const h=d.health||{};
   const ok=h.healthy!==false;
+  const trackedCount=(d.symbols||[]).length;
+  const sourceAge=d.market_age_seconds!=null?`${d.market_age_seconds}s`:'N/A';
+  const lastRun=h.last_strategy_run_ago||'never';
+  const lastResult=h.last_strategy_success===false?'failed':'ok';
   el.innerHTML=`
     <span><span class="status-dot ${ok?'ok':'error'}"></span>${ok?'Healthy':'Issues detected'}</span>
     <span>Strategy: ${esc(d.strategy)}</span>
     <span>Mode: ${esc(d.trade_mode)}</span>
     <span>Interval: ${esc(d.interval_minutes)}min</span>
+    <span>Tracked: ${esc(trackedCount)}</span>
     <span>Symbols: ${esc((d.symbols||[]).join(', '))}</span>
+    <span>Source Age: ${esc(sourceAge)}</span>
     <span>Uptime: ${esc(h.uptime_minutes||0)}min</span>
+    <span>Last Run: ${esc(lastRun)}</span>
+    <span>Last Result: ${esc(lastResult)}</span>
     <span>Cycles: ${esc(h.total_cycles||0)}</span>
     <span>Errors: ${esc(h.consecutive_errors||0)}</span>`;
 }
@@ -649,7 +766,21 @@ document.addEventListener('keydown', e => {
 bindTooltips();
 
 fetchAll();
-setInterval(fetchAll,10000);
+
+let _progress = 0;
+const rb = document.getElementById('refresh-bar');
+setInterval(() => {
+  _progress += 10;
+  if (_progress >= 100) {
+    _progress = 0;
+    rb.style.transition = 'none';
+    rb.style.width = '0%';
+    setTimeout(() => { rb.style.transition = 'width 1s linear'; }, 50);
+    fetchAll();
+  } else {
+    rb.style.width = _progress + '%';
+  }
+}, 1000);
 </script>
 </body>
 </html>

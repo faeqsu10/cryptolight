@@ -1,5 +1,6 @@
 import html
 import logging
+import time
 
 import httpx
 
@@ -15,7 +16,7 @@ ACTION_LABEL = {"buy": "매수 시그널", "sell": "매도 시그널", "hold": "
 _LEVEL_EVENTS: dict[str, set[str]] = {
     "silent": {"killswitch", "error"},
     "minimal": {"killswitch", "error", "execution", "stop_trigger"},
-    "normal": {"killswitch", "error", "execution", "stop_trigger", "daily_summary", "startup", "shutdown"},
+    "normal": {"killswitch", "error", "execution", "stop_trigger", "daily_summary", "startup", "shutdown", "signal", "cycle_summary"},
     "verbose": {"killswitch", "error", "execution", "stop_trigger", "daily_summary", "startup", "shutdown", "signal", "cycle_summary", "risk_blocked", "tuning", "screening"},
 }
 
@@ -33,18 +34,52 @@ class TelegramBot:
         return event_type in allowed
 
     def send_message(self, text: str) -> bool:
-        try:
-            resp = self._client.post(
-                f"{self._base_url}/sendMessage",
-                json={"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"},
-            )
-            if resp.status_code == 200 and resp.json().get("ok"):
-                return True
-            logger.warning("텔레그램 전송 실패: %s", resp.text)
-            return False
-        except Exception as e:
-            logger.error("텔레그램 전송 에러: %s", e)
-            return False
+        delay_seconds = 0.5
+        for attempt in range(1, 4):
+            try:
+                resp = self._client.post(
+                    f"{self._base_url}/sendMessage",
+                    json={"chat_id": self._chat_id, "text": text, "parse_mode": "HTML"},
+                )
+                if resp.status_code == 200 and resp.json().get("ok"):
+                    return True
+
+                retry_after = 0.0
+                if resp.status_code == 429:
+                    try:
+                        retry_after = float(resp.json().get("parameters", {}).get("retry_after", 0))
+                    except Exception:
+                        retry_after = 0.0
+
+                if resp.status_code in {429, 500, 502, 503, 504} and attempt < 3:
+                    logger.warning("텔레그램 전송 재시도(%d/3): status=%s", attempt, resp.status_code)
+                    time.sleep(max(retry_after, delay_seconds))
+                    delay_seconds *= 2
+                    continue
+
+                logger.warning("텔레그램 전송 실패: %s", resp.text)
+                return False
+            except httpx.TimeoutException as e:
+                if attempt < 3:
+                    logger.warning("텔레그램 전송 타임아웃 재시도(%d/3): %s", attempt, e)
+                    time.sleep(delay_seconds)
+                    delay_seconds *= 2
+                    continue
+                logger.error("텔레그램 전송 에러: %s", e)
+                return False
+            except httpx.RequestError as e:
+                if attempt < 3:
+                    logger.warning("텔레그램 전송 요청 재시도(%d/3): %s", attempt, e)
+                    time.sleep(delay_seconds)
+                    delay_seconds *= 2
+                    continue
+                logger.error("텔레그램 전송 에러: %s", e)
+                return False
+            except Exception as e:
+                logger.error("텔레그램 전송 에러: %s", e)
+                return False
+
+        return False
 
     def send_signal(self, signal: Signal, price: float | None = None) -> bool:
         emoji = ACTION_EMOJI.get(signal.action, "")

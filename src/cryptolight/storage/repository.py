@@ -2,7 +2,7 @@ import json
 import logging
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from cryptolight.storage.models import TradeRecord
@@ -117,35 +117,63 @@ class TradeRepository:
                 ).fetchall()
         return [TradeRecord(**dict(row)) for row in rows]
 
+    def get_trades_by_date(self, date: str) -> list[TradeRecord]:
+        """특정 날짜(YYYY-MM-DD)의 거래 내역을 최신순으로 반환한다."""
+        next_day = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM trades WHERE timestamp >= ? AND timestamp < ? ORDER BY id DESC",
+                (date, next_day),
+            ).fetchall()
+        return [TradeRecord(**dict(row)) for row in rows]
+
     def get_daily_pnl(self, date: str | None = None) -> dict:
         """일일 실현 손익 계산. date 형식: YYYY-MM-DD"""
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
 
+        next_day = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM trades WHERE timestamp LIKE ? ORDER BY id",
-                (f"{date}%",),
+                "SELECT * FROM trades WHERE timestamp < ? ORDER BY id",
+                (next_day,),
             ).fetchall()
 
         total_bought = 0.0
         total_sold = 0.0
         total_commission = 0.0
         trade_count = 0
+        realized_pnl = 0.0
+        positions: dict[str, dict[str, float]] = {}
 
         for row in rows:
-            trade_count += 1
-            total_commission += row["commission"]
-            if row["side"] == "buy":
-                total_bought += row["amount_krw"]
-            else:
-                total_sold += row["amount_krw"]
+            symbol = row["symbol"]
+            pos = positions.setdefault(symbol, {"quantity": 0.0, "avg_price": 0.0})
+            is_target_day = str(row["timestamp"]).startswith(date)
 
-        # 매도가 있을 때만 실현 손익 계산 (매수만 있는 날은 아직 미실현)
-        if total_sold > 0:
-            realized_pnl = total_sold - total_bought - total_commission
-        else:
-            realized_pnl = -total_commission  # 수수료만 차감
+            if row["side"] == "buy":
+                new_quantity = pos["quantity"] + row["quantity"]
+                if new_quantity > 0:
+                    total_cost = pos["quantity"] * pos["avg_price"] + row["amount_krw"]
+                    pos["avg_price"] = total_cost / new_quantity
+                pos["quantity"] = new_quantity
+                if is_target_day:
+                    total_bought += row["amount_krw"]
+            else:
+                sell_qty = min(row["quantity"], pos["quantity"])
+                cost_basis = pos["avg_price"] * sell_qty
+                pos["quantity"] = max(0.0, pos["quantity"] - sell_qty)
+                if pos["quantity"] == 0:
+                    pos["avg_price"] = 0.0
+                if is_target_day:
+                    total_sold += row["amount_krw"]
+                    realized_pnl += row["amount_krw"] - cost_basis
+
+            if is_target_day:
+                trade_count += 1
+                total_commission += row["commission"]
+
+        realized_pnl -= total_commission
 
         return {
             "date": date,
