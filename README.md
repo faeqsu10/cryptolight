@@ -21,6 +21,169 @@ graph LR
     style D fill:#c0392b,color:#fff
 ```
 
+## 시스템 아키텍처
+
+```mermaid
+graph TB
+    subgraph Entry["진입점"]
+        MAIN["main.py"]
+        BOOT["bootstrap.py"]
+    end
+
+    subgraph Runtime["런타임 계층"]
+        ORCH["orchestrator.py<br/>스케줄러 · 서비스 조립"]
+        SE["strategy_engine.py<br/>시그널 계산 · 손절/익절"]
+        CMD["commanding.py<br/>텔레그램 명령 처리"]
+        RPT["reporting.py<br/>리포트 텍스트 생성"]
+        IMP["improvement.py<br/>전략 전환 · 파라미터 튜닝"]
+        STATE["state.py<br/>공유 상태 관리"]
+    end
+
+    subgraph Domain["도메인 계층"]
+        STRAT["strategy/<br/>RSI · MACD · BB · Score"]
+        RISK["risk/<br/>손절 · 익절 · 포지션 사이징"]
+        EVAL["evaluation/<br/>성과 평가 · 전략 경쟁"]
+        MKT["market/<br/>국면 감지 · 스크리닝"]
+        STORE["storage/<br/>SQLite 영속 저장"]
+    end
+
+    subgraph Interface["인터페이스 계층"]
+        BOT["bot/<br/>텔레그램 전송"]
+        WEB["web/<br/>FastAPI 대시보드"]
+        BT["backtest/<br/>백테스트 CLI"]
+    end
+
+    subgraph External["외부"]
+        UPBIT["업비트 API"]
+        TG["텔레그램"]
+        GEMINI["Gemini AI"]
+    end
+
+    MAIN --> BOOT
+    BOOT --> ORCH
+    ORCH --> SE & CMD & RPT & IMP
+    SE --> STRAT & RISK & MKT
+    IMP --> EVAL & STRAT
+    SE --> STATE
+    CMD --> STATE
+    RPT --> STATE
+
+    STRAT --> STORE
+    RISK --> STORE
+    EVAL --> STORE
+
+    SE --> |매매 실행| UPBIT
+    CMD --> BOT --> TG
+    RPT --> BOT
+    CMD --> |/ask| GEMINI
+    ORCH --> WEB
+
+    style Entry fill:#2c3e50,color:#fff
+    style Runtime fill:#34495e,color:#fff
+    style Domain fill:#1a5276,color:#fff
+    style Interface fill:#1e8449,color:#fff
+    style External fill:#7d3c98,color:#fff
+```
+
+## 매매 실행 플로우
+
+```mermaid
+flowchart TD
+    START(["스케줄러 트리거<br/>(60분 주기)"]) --> CANDLE["캔들 데이터 조회<br/>(업비트 REST API)"]
+    CANDLE --> REGIME["시장 국면 감지<br/>ADX + BB 폭"]
+    REGIME --> |추세장| TW["MACD 1.5x / BB 0.5x"]
+    REGIME --> |횡보장| SW["MACD 0.5x / BB 1.5x"]
+    REGIME --> |변동장| VW["가중치 동일"]
+    TW & SW & VW --> SCORE["멀티팩터 스코어 계산<br/>(6개 팩터, 100점 만점)"]
+    SCORE --> CONF{"confidence<br/>>= 40%?"}
+    CONF --> |No| BLOCK["매수 차단"]
+    CONF --> |Yes| SIGNAL{"시그널 판정"}
+    SIGNAL --> |매수| RISK_CHK["리스크 체크<br/>일일 손실 · 동시보유 · 쿨다운"]
+    SIGNAL --> |매도| SELL["매도 주문 실행"]
+    SIGNAL --> |HOLD| HOLD["대기"]
+    RISK_CHK --> |통과| BUY["매수 주문 실행<br/>(포지션 사이징)"]
+    RISK_CHK --> |차단| BLOCK2["매수 차단 + 알림"]
+    BUY --> NOTIFY["텔레그램 알림<br/>(체결 상세)"]
+    SELL --> NOTIFY
+    BLOCK --> LOG["로그 기록"]
+    BLOCK2 --> LOG
+
+    style START fill:#2c3e50,color:#fff
+    style SCORE fill:#4a6fa5,color:#fff
+    style RISK_CHK fill:#c0392b,color:#fff
+    style BUY fill:#27ae60,color:#fff
+    style SELL fill:#e74c3c,color:#fff
+    style BLOCK fill:#95a5a6,color:#fff
+    style BLOCK2 fill:#95a5a6,color:#fff
+```
+
+## 리스크 관리 체계
+
+```mermaid
+flowchart LR
+    subgraph PreTrade["사전 검증"]
+        A1["confidence 게이트<br/>(40% 이상)"]
+        A2["국면 가중치 게이트<br/>(저품질 국면 차단)"]
+        A3["거래량 필터<br/>(평균 이상)"]
+        A4["매매 쿨다운<br/>(중복 방지)"]
+        A5["동시 보유 제한"]
+    end
+
+    subgraph Sizing["포지션 사이징"]
+        B1["percent 모드<br/>(총자산 N%)"]
+        B2["kelly 모드<br/>(켈리 공식)"]
+        B3["fixed 모드<br/>(고정 금액)"]
+        B4["1회 최대 금액 캡"]
+        B5["Live 하드캡<br/>(50만원)"]
+    end
+
+    subgraph PostTrade["사후 보호"]
+        C1["자동 손절<br/>(-10%)"]
+        C2["자동 익절<br/>(+15%)"]
+        C3["트레일링 스톱"]
+        C4["일일 손실 한도<br/>(초과 시 매수 차단)"]
+        C5["WebSocket 실시간<br/>가격 모니터링"]
+    end
+
+    PreTrade --> Sizing --> PostTrade
+
+    style PreTrade fill:#e67e22,color:#fff
+    style Sizing fill:#2980b9,color:#fff
+    style PostTrade fill:#c0392b,color:#fff
+```
+
+## 자기개선 루프
+
+```mermaid
+flowchart TD
+    subgraph Weekly["주 1회: 전략 전환"]
+        W1["성과 평가<br/>Sharpe · 승률 · MDD"] --> W2["전략 경쟁 Arena<br/>다중 백테스트"]
+        W2 --> W3{"최고 성과<br/>전략 변경?"}
+        W3 --> |Yes| W4["전략 자동 전환"]
+        W3 --> |No| W5["현행 유지"]
+        W4 --> W6{"전환 후<br/>성과 악화?"}
+        W6 --> |Yes| W7["이전 전략 롤백"]
+        W6 --> |No| W8["전환 확정"]
+    end
+
+    subgraph SixHour["6시간마다: 파라미터 튜닝"]
+        S1["현재 파라미터<br/>Sharpe 계산"] --> S2["후보 파라미터<br/>범위 탐색"]
+        S2 --> S3["Walk-Forward<br/>검증 (과적합 방지)"]
+        S3 --> S4{"개선 폭 ><br/>임계값?"}
+        S4 --> |Yes| S5["파라미터 반영"]
+        S4 --> |No| S6["현행 유지"]
+    end
+
+    W8 & W7 & W5 --> NOTIFY1["텔레그램 알림<br/>(초보자용 설명)"]
+    S5 & S6 --> NOTIFY2["텔레그램 알림<br/>(변경 사유 설명)"]
+
+    style Weekly fill:#2c3e50,color:#fff
+    style SixHour fill:#1a5276,color:#fff
+    style W4 fill:#27ae60,color:#fff
+    style W7 fill:#e74c3c,color:#fff
+    style S5 fill:#27ae60,color:#fff
+```
+
 ## 빠른 시작
 
 ```bash
